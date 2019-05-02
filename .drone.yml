@@ -131,7 +131,14 @@ pipeline:
     <<: *sbtenv
     group: test
     commands:
-      - sbt test
+      - sbt coverage test
+
+  codecove-report:
+    <<: *sbtenv
+    secrets: [ cc_token ]
+    commands:
+      - sbt coverageReport
+      - bash <(curl -s https://codecov.io/bash) -t $CC_TOKEN
 
   docker-build-node-engine-and-client:	
     <<: *sbtenv	
