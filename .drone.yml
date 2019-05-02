@@ -352,6 +352,11 @@ pipeline:
     channel: alerts
     secrets: [ slack_webhook ]
     template: |
-      *{{ uppercasefirst build.status }} -* Commit: <${DRONE_COMMIT_LINK}|{{ truncate build.commit 10 }}> Commit Message: ${DRONE_COMMIT_MESSAGE} Author: {{ build.author }} PR: <{{ build.link }}|#{{ build.pull }}>
+      *{{ uppercasefirst build.status }} *
+      Commit: <${DRONE_COMMIT_LINK}|{{ truncate build.commit 10 }}>
+      Commit Message: ${DRONE_COMMIT_MESSAGE}
+      Author: {{ build.author }} 
+      PR: <{{ build.link }}|#{{ build.pull }} - "${DRONE_COMMIT_MESSAGE}">
+      Drone Build:  <{{ build.link }}|#{{ build.number }}>
     when:
       status: [ failure ]
