@@ -352,6 +352,6 @@ pipeline:
     channel: alerts
     secrets: [ slack_webhook ]
     template: |
-      *{{ build.status }}* <{{ build.link }}|{{ repo.owner }}/{{ repo.name }}#{{ truncate build.commit 10 }}> ({{ build.branch }}) by {{ build.author }} ${DRONE_COMMIT_BRANCH} ${DRONE_REPO_BRANCH} ${DRONE_BRANCH} ${DRONE_PULL_REQUEST}.
+      *{{ build.status }}* <{{ build.link }}|{{ repo.owner }}/{{ repo.name }}#{{ truncate build.commit 10 }}> ({{ build.branch }}) by {{ build.author }} ${DRONE_COMMIT_BRANCH} ${DRONE_REPO_BRANCH} ${DRONE_BRANCH} ${DRONE_PULL_REQUEST} ${DRONE_SOURCE_BRANCH}.
     when:
       status: [ failure ]
