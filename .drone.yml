@@ -350,5 +350,7 @@ pipeline:
     image: plugins/slack
     channel: alerts
     secrets: [ slack_webhook ]
+    template: |
+      *{{ build.status }}* <{{ build.link }}|{{ repo.owner }}/{{ repo.name }}#{{ truncate build.commit 8 }}> ({{ build.branch }}) by {{ build.author }}.
     when:
       status: [ failure ]
