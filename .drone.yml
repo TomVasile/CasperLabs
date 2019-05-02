@@ -35,6 +35,7 @@ clone:
           EMAIL=ci git merge --no-edit FETCH_HEAD
       fi
       git rev-parse HEAD
+      exit 1
 
   # The following steps labeled as '*-mac' are used to check and compile
   # portions of the pipeline. This method mimics what was suggested in the
