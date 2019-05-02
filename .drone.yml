@@ -352,6 +352,6 @@ pipeline:
     channel: alerts
     secrets: [ slack_webhook ]
     template: |
-      *Build {{ build.status }}* for commit {{ truncate build.commit 10 }} by @{{ build.author }} in PR: <{{ build.link }}|#{{ build.pull }}
+      Build *{{ build.status }}* for commit {{ truncate build.commit 10 }} by @{{ build.author }} in PR: <{{ build.link }}|#{{ build.pull }}>
     when:
       status: [ failure ]
