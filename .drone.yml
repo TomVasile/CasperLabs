@@ -16,7 +16,7 @@ __buildenv: &buildenv
 __sbtenv: &sbtenv
   <<: *buildenv
   environment:
-    - _JAVA_OPTIONS=-Xms2G -Xmx4G -XX:MaxMetaspaceSize=1G
+    - _JAVA_OPTIONS=-Xms8G -Xmx8G -XX:MaxMetaspaceSize=1G
   volumes:
     - /var/cache/cl-build/.sbt:/root/.sbt
     - /var/cache/cl-build/.ivy2:/root/.ivy2
