@@ -62,12 +62,14 @@ pipeline:
   run-unit-tests:
     <<: *sbtenv
     group: test
-    commands:
-      - sbt coverage test
-
-  codecove-report:
-    <<: *sbtenv
     secrets: [ cc_token ]
     commands:
-      - sbt coverageReport
+      - sbt clean coverage test coverageReport
       - codecov -t $CC_TOKEN
+
+#  codecove-report:
+#    <<: *sbtenv
+#    secrets: [ cc_token ]
+#    commands:
+#      - sbt coverageReport
+#      - codecov -t $CC_TOKEN
