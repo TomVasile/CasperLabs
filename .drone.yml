@@ -70,4 +70,4 @@ pipeline:
     secrets: [ cc_token ]
     commands:
       - sbt coverageReport
-      - bash <(curl -s https://codecov.io/bash) -t $CC_TOKEN
+      - codecov -t $CC_TOKEN
