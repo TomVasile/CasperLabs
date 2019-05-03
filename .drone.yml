@@ -64,7 +64,7 @@ pipeline:
     group: test
     secrets: [ cc_token ]
     commands:
-      - sbt coverage test coverageReport
+      - sbt clean coverage test coverageReport
       - codecov -t $CC_TOKEN
 
 #  codecove-report:
