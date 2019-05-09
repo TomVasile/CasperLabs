@@ -1,7 +1,7 @@
 branches:
 # Merges to `dev` are only ever done by bors, using a fast-forward merge, if the `staging` build passes.
 # This means everything that lands in dev has already been tested in CI.
-#  - dev
+  - dev
   - master
   - release-*
   - testing*
@@ -96,6 +96,8 @@ pipeline:
     commands:
       - cd execution-engine/
       - ~/.cargo/bin/cargo bench
+    when:
+      branch: [ staging, trying ]
 
   run-unit-tests:
     <<: *sbtenv
@@ -112,6 +114,8 @@ pipeline:
       - make docker-build/integration-testing
     volumes:	
       - /var/run/docker.sock:/var/run/docker.sock
+    when:
+      branch: [ staging, trying ]
 
   run-integration-tests:
     <<: *sbtenv
@@ -122,6 +126,8 @@ pipeline:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp:/tmp
+    when:
+      branch: [ staging, trying ]
 
   # push
 
