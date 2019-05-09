@@ -1,8 +1,12 @@
 branches:
-  - dev
+# Merges to `dev` are only ever done by bors, using a fast-forward merge, if the `staging` build passes.
+# This means everything that lands in dev has already been tested in CI.
+#  - dev
   - master
   - release-*
   - testing*
+  - trying
+  - staging
 
 # Common parts
 
