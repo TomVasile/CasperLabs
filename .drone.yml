@@ -115,7 +115,7 @@ pipeline:
     volumes:	
       - /var/run/docker.sock:/var/run/docker.sock
     when:
-      branch: [ staging, trying ]
+      branch: [ staging, trying, master, release-* ]
 
   run-integration-tests:
     <<: *sbtenv
