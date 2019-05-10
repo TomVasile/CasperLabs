@@ -42,7 +42,8 @@ clone:
 
 pipeline:
 
-  # pr
+  # Run Always
+  ## this section is meant to be run in all stages of our CI Pipeline.
 
   sbt-update:
     <<: *sbtenv
@@ -83,12 +84,22 @@ pipeline:
       - cd execution-engine/
       - ~/.cargo/bin/cargo test
 
+  run-unit-tests:
+    <<: *sbtenv
+    group: test
+    commands:
+      - sbt test
+
+  # This section of the Pipeline is variable and not always run in all situations
+
   try-cargo-publish:
     <<: *buildenv
     group: test
     commands:
       - cd execution-engine/common
       - ~/.cargo/bin/cargo publish --dry-run
+    when:
+      branch: [ staging, trying ]
 
   run-rust-benchmarks:
     <<: *buildenv
@@ -99,13 +110,7 @@ pipeline:
     when:
       branch: [ staging, trying ]
 
-  run-unit-tests:
-    <<: *sbtenv
-    group: test
-    commands:
-      - sbt test
-
-  docker-build-node-engine-and-client:	
+  docker-build-artifacts-bors:	
     <<: *sbtenv	
     commands:	
       - sbt node/docker:publishLocal client/docker:publishLocal
@@ -115,7 +120,20 @@ pipeline:
     volumes:	
       - /var/run/docker.sock:/var/run/docker.sock
     when:
-      branch: [ staging, trying, master, release-* ]
+      branch: [ staging, trying ]
+
+  docker-build-artifacts-merge:	
+    <<: *sbtenv	
+    commands:	
+      - sbt node/docker:publishLocal client/docker:publishLocal
+      - export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}
+      - make docker-build/execution-engine
+      - make docker-build/integration-testing
+    volumes:	
+      - /var/run/docker.sock:/var/run/docker.sock
+    when:
+      event: [ push, tag ]
+      branch: [ dev, release-*, master ]
 
   run-integration-tests:
     <<: *sbtenv
@@ -143,6 +161,7 @@ pipeline:
       - /var/run/docker.sock:/var/run/docker.sock
     when:
       event: [ push, tag ]
+      branch: [ dev, release-*, master ]
 
   package-client-rpm:
     <<: *sbtenv
@@ -155,6 +174,7 @@ pipeline:
       - /var/cache/cl-build/.ivy2:/root/.ivy2
     when:
       event: [ push, tag ]
+      branch: [ dev, release-*, master ]
 
   package-node-deb-universal:
     <<: *sbtenv
@@ -168,6 +188,7 @@ pipeline:
       - /var/run/docker.sock:/var/run/docker.sock
     when:
       event: [ push, tag ]
+      branch: [ dev, release-*, master ]
 
   package-node-rpm:
     <<: *sbtenv
@@ -180,6 +201,7 @@ pipeline:
       - /var/cache/cl-build/.ivy2:/root/.ivy2
     when:
       event: [ push, tag ]
+      branch: [ dev, release-*, master ]
 
   package-ee:
     <<: *buildenv
@@ -201,6 +223,7 @@ pipeline:
         cp $TARGET $WORKING_DIR/artifacts/${DRONE_BRANCH}
     when:
       event: [ push, tag ]
+      branch: [ dev, release-*, master ]
 
   rsync-artifacts:
     image: drillster/drone-rsync
@@ -212,6 +235,7 @@ pipeline:
     recursive: true
     when:
       event: [ push, tag ]
+      branch: [ dev, release-*, master ]
 
   github_publish_release_artifacts:
     image: plugins/github-release
@@ -255,6 +279,7 @@ pipeline:
     secrets: [ docker_username, docker_password ]
     when:
       event: [ push, tag ]
+      branch: [ dev, release-*, master ]
 
   contract-examples:
     image: plugins/downstream
@@ -264,6 +289,7 @@ pipeline:
       - CasperLabs/contract-examples@master
     when:
       event: [ push, tag ]
+      branch: [ dev, release-*, master ]
 
   cleanup:
     <<: *sbtenv
