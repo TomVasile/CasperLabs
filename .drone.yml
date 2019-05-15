@@ -43,7 +43,7 @@ clone:
   #    https://www.fwd.cloud/commit/post/drone-ios-deployments/
   #
   # The mac server is configured following our Developer.md suggestions
-  # for mac users. Please see the Developer.md for specifics.
+  ## for mac users. Please see the Developer.md for specifics.
 
 pipeline:
 
