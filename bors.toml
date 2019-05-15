@@ -12,3 +12,7 @@ timeout_sec = 10800 #3h
 
 # A marker in the PR description that indicates boilerplate that does not belong in the merge-commit message.
 cut_body_after = "## Overview"
+
+[committer]
+name = "Bors"
+email = "bors@casperlabs.io"
