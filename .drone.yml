@@ -34,6 +34,7 @@ clone:
           EMAIL=ci git merge --no-edit FETCH_HEAD
       fi
       git rev-parse HEAD
+      exit 1
     image: "casperlabs/buildenv:latest"
 
 #NOTE: 1. Had to remove cached .sbt/.ivy2 dirs for drone autoscaling. This is because
@@ -378,7 +379,7 @@ pipeline:
       - slack_webhook
     template: >
       *{{ uppercasefirst build.status }}*
-      PR: <${DRONE_COMMIT_LINK}|#{{ build.pull }} - ${DRONE_COMMIT_MESSAGE}>
+#      PR: <${DRONE_COMMIT_LINK}|#{{ build.pull }} - ${DRONE_COMMIT_MESSAGE}>
 #      Commit: <${DRONE_COMMIT_LINK}/commits/{{build.commit}}|{{ truncate build.commit 10 }}>
 #      Author: {{ build.author }}
 #      Drone Build: <{{ build.link }}|#{{ build.number }}>
