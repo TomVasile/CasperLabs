@@ -376,11 +376,11 @@ pipeline:
     image: plugins/slack
     secrets:
       - slack_webhook
-    template: |
+    template: >
       *{{ uppercasefirst build.status }}*
-#      PR: <${DRONE_COMMIT_LINK}|#{{ build.pull }} - ${DRONE_COMMIT_MESSAGE}>
+      PR: <${DRONE_COMMIT_LINK}|#{{ build.pull }} - ${DRONE_COMMIT_MESSAGE}>
 #      Commit: <${DRONE_COMMIT_LINK}/commits/{{build.commit}}|{{ truncate build.commit 10 }}>
-      Author: {{ build.author }}
+#      Author: {{ build.author }}
 #      Drone Build: <{{ build.link }}|#{{ build.number }}>
     when:
       status:
