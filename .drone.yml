@@ -380,7 +380,6 @@ pipeline:
     template: >
       *{{ uppercasefirst build.status }}*
         PR LINK: <${DRONE_REPO_LINK}/pull/${DRONE_PULL_REQUEST}>
-#        PR TITLE: <${DRONE_COMMIT_LINK}|#{{ build.pull }} - ${DRONE_COMMIT_MESSAGE}>
         Commit: <${DRONE_COMMIT_LINK}/commits/{{build.commit}}|{{ truncate build.commit 10 }}>
         Author: {{ build.author }}
         Drone Build: <{{ build.link }}|#{{ build.number }}>
