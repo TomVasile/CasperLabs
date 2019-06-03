@@ -50,19 +50,32 @@ pipeline:
     image: "casperlabs/buildenv:latest"
 
   rsync-artifacts:
+    delete: true
+    hosts:
+      - $REPO_HOST
     image: drillster/drone-rsync
-    settings:
-      delete: true
-      source: "artifacts/tom_test"
-      target:
-        from_secret: repo_path
-      hosts:
-        from_secret: host
-      user:
-        from_secret: rsync_user
-      key:
-        from_secret: rsync_key
-      recursive: true
+    recursive: true
+    secrets:
+      - repo_host
+      - rsync_user
+      - rsync_key
+      - repo_path
+    source: "artifacts/tom_test"
+    target: $REPO_PATH/
+#  rsync-artifacts:
+#    image: drillster/drone-rsync
+#    settings:
+#      delete: true
+#      source: "artifacts/tom_test"
+#      target:
+#        from_secret: repo_path
+#      hosts:
+#        from_secret: host
+#      user:
+#        from_secret: rsync_user
+#      key:
+#        from_secret: rsync_key
+#      recursive: true
 
 # Signature for Drone
 ---
