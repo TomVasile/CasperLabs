@@ -61,6 +61,7 @@ pipeline:
       - rsync_key
       - repo_path
     source: "artifacts/tom_test"
+    args: "--verbose"
     target: $REPO_PATH/
 #  rsync-artifacts:
 #    image: drillster/drone-rsync
