@@ -379,10 +379,10 @@ pipeline:
       - slack_webhook
     template: >
       *{{ uppercasefirst build.status }}*
-        Title: ${DRONE_COMMIT_MESSAGE}
+        PR: ${DRONE_COMMIT_MESSAGE}
+        Drone Build: <{{ build.link }}|#{{ build.number }}>
         Commit: <${DRONE_COMMIT_LINK}/commits/{{build.commit}}|{{ truncate build.commit 10 }}>
-        Author: {{ build.author }}
-        Drone Build: <{{ build.link }}|#{{ build.number }}> 
+        Author: {{ build.author }} 
     when:
       status:
         - failure
