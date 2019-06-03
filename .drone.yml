@@ -57,7 +57,7 @@ pipeline:
       target:
         from_secret: repo_path
       hosts:
-        from_secret: repo_host
+        from_secret: host
       user:
         from_secret: rsync_user
       key:
