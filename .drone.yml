@@ -377,12 +377,11 @@ pipeline:
     image: plugins/slack
     secrets:
       - slack_webhook
-#    template: >
-#      *{{ uppercasefirst build.status }}*
-#        PR: ${DRONE_COMMIT_MESSAGE}
-#        Drone Build: <{{ build.link }}>
-#        Commit: <${DRONE_COMMIT_LINK}>
-#        Author: {{ build.author }} 
+    template: >
+      *{{ uppercasefirst build.status }}*
+        Author: {{ build.author }} 
+        Drone Build: <{{ build.link }}>
+        Commit: <${DRONE_COMMIT_LINK}>
     when:
       status:
         - failure
