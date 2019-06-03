@@ -45,7 +45,7 @@ clone:
 pipeline:
   package-ee:
     commands:
-      - "mkdir -p artifacts/tom_test
+      - "mkdir -p artifacts/tom_test"
       - "make cargo-package-all"
       - "cp execution-engine/target/debian/casperlabs-engine-grpc-server_*.deb artifacts/tom_test"
       - "cp execution-engine/target/release/rpmbuild/RPMS/x86_64/casperlabs-engine-grpc-server-*.rpm artifacts/tom_test"
