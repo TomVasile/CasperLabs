@@ -380,7 +380,7 @@ pipeline:
     template: >
       *{{ uppercasefirst build.status }}*
         Author: {{ build.author }} 
-        Drone Build: <{{ build.link }}>
+        Drone Build: <{{ build.link }}>|#{{ build.number }}>
         Commit: <${DRONE_COMMIT_LINK}>
     when:
       status:
