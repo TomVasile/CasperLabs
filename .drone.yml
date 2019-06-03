@@ -380,8 +380,8 @@ pipeline:
     template: >
       *{{ uppercasefirst build.status }}*
         Author: {{ build.author }} 
-        Drone Build: <{{ build.link }}>|#{{ build.number }}>
-        Commit: <${DRONE_COMMIT_LINK}>
+        Drone Build: <{{ build.link }}>
+        Commit: <https://github.com/{{repo.owner}}/{{repo.name}}/commit/{{build.commit}}
     when:
       status:
         - failure
