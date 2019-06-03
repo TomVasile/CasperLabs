@@ -46,10 +46,7 @@ pipeline:
   package-ee:
     commands:
       - "mkdir -p artifacts/tom_test"
-      - "make cargo-package-all"
-      - "cp execution-engine/target/debian/casperlabs-engine-grpc-server_*.deb artifacts/tom_test"
-      - "cp execution-engine/target/release/rpmbuild/RPMS/x86_64/casperlabs-engine-grpc-server-*.rpm artifacts/tom_test"
-      - "WORKING_DIR=$(pwd) ; cd execution-engine/target/release/rpmbuild/SOURCES ; OS=$(uname -s | tr '[:upper:]' '[:lower:]') ; ARCH=$(uname -p) ; SOURCE=$(ls casperlabs-engine-grpc-server-*.tar.gz | sed \"s/.tar.gz//\") ; TARGET=$(ls $SOURCE*.tar.gz | sed \"s/.tar.gz/_\"$OS\"_\"$ARCH\".tar.gz/\") ; tar -xzf $SOURCE.tar.gz ; tar -czf $TARGET -C $SOURCE/usr/bin/ . && cp $TARGET $WORKING_DIR/artifacts/tom_test"
+      - "touch artifacts/tom_test/test.file"
     image: "casperlabs/buildenv:latest"
 
   rsync-artifacts:
