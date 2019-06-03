@@ -379,15 +379,12 @@ pipeline:
       - slack_webhook
     template: >
       *{{ uppercasefirst build.status }}*
-      {{#bors[bot] build.author }}
-        Author: {{ build.author }}
-        Drone Build: <{{ build.link }}|#{{ build.number }}>
-      {{else}}
+       
         PR LINK: <${DRONE_REPO_LINK}/pull/${DRONE_PULL_REQUEST}>
         Commit: <${DRONE_COMMIT_LINK}/commits/{{build.commit}}|{{ truncate build.commit 10 }}>
         Author: {{ build.author }}
         Drone Build: <{{ build.link }}|#{{ build.number }}>
-      {{/bors[bot]}}
+        SRC: ${DRONE_SOURCE_BRANCH}
     when:
       status:
         - failure
