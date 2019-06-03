@@ -381,7 +381,7 @@ pipeline:
       *{{ uppercasefirst build.status }}*
         Author: {{ build.author }} 
         Drone Build: <{{ build.link }}>
-        Commit: <https://github.com/{{repo.owner}}/{{repo.name}}/commit/{{build.commit}}
+        Commit: <https://github.com/{{repo.owner}}/{{repo.name}}/commit/{{build.commit}}>
     when:
       status:
         - failure
