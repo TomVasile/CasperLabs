@@ -363,7 +363,9 @@ object GossipServiceCasperTestNodeFactory {
           maxPossibleDepth = Int.MaxValue,
           minBlockCountToCheckBranchingFactor = Int.MaxValue,
           maxBranchingFactor = 2.0,
-          maxDepthAncestorsRequest = 1 // Just so we don't see the full DAG being synced all the time. We should have justifications for early stop.
+          maxDepthAncestorsRequest = 1, // Just so we don't see the full DAG being synced all the time. We should have justifications for early stop.
+          maxInitialBlockCount = Int.MaxValue,
+          isInitialRef = Ref.unsafe[F, Boolean](false)
         )
 
         server <- GossipServiceServer[F](
@@ -373,23 +375,10 @@ object GossipServiceCasperTestNodeFactory {
 
                      override def getBlockSummary(
                          blockHash: ByteString
-                     ): F[Option[consensus.BlockSummary]] = {
+                     ): F[Option[consensus.BlockSummary]] =
                        Log[F].debug(
                          s"Retrieving block summary ${PrettyPrinter.buildString(blockHash)} from storage."
-                       )
-                       blockStore
-                         .get(blockHash)
-                         .map(
-                           _.map { mwt =>
-                             val b = mwt.getBlockMessage
-                             consensus
-                               .BlockSummary()
-                               .withBlockHash(b.blockHash)
-                               .withHeader(b.getHeader)
-                               .withSignature(b.getSignature)
-                           }
-                         )
-                     }
+                       ) *> blockStore.getBlockSummary(blockHash)
 
                      override def getBlock(blockHash: ByteString): F[Option[consensus.Block]] =
                        Log[F].debug(
