@@ -46,9 +46,15 @@ pipeline:
 
   sbt-compile-test:
     commands:
-      - "sbt test"
+      - "sbt coverage test coverageReport"
     environment:
       - "_JAVA_OPTIONS=-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+    image: "casperlabs/buildenv:latest"
+
+  push-codecov:
+    secrets: [ codecov_token ]
+    commands:
+      - "codecov -t $CODECOV_TOKEN"
     image: "casperlabs/buildenv:latest"
 
   git-status-post-scala-compile:
