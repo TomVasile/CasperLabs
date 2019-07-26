@@ -445,6 +445,8 @@ pipeline:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
     when:
+      event:
+        - push
       ref:
         - refs/tags/v*
 
@@ -459,6 +461,8 @@ pipeline:
       - "WORKING_DIR=$(pwd) ; cd execution-engine/target/release/rpmbuild/SOURCES ; OS=$(uname -s | tr '[:upper:]' '[:lower:]') ; ARCH=$(uname -p) ; SOURCE=$(ls casperlabs-engine-grpc-server-*.tar.gz | sed \"s/.tar.gz//\") ; TARGET=$(ls $SOURCE*.tar.gz | sed \"s/.tar.gz/_\"$OS\"_\"$ARCH\".tar.gz/\") ; tar -xzf $SOURCE.tar.gz ; tar -czf $TARGET -C $SOURCE/usr/bin/ . && cp $TARGET $WORKING_DIR/artifacts/${DRONE_BRANCH}"
     image: "casperlabs/buildenv:latest"
     when:
+      event:
+        - push
       ref:
         - refs/tags/v*
 
@@ -473,6 +477,8 @@ pipeline:
     secrets:
       - github_token
     when:
+      event:
+        - push
       ref:
         - refs/tags/v*
 
