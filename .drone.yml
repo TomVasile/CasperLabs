@@ -447,7 +447,7 @@ pipeline:
       - "/var/run/docker.sock:/var/run/docker.sock"
     when:
       event:
-        - push
+        - tag
       ref:
         - refs/tags/v*
 
@@ -463,7 +463,7 @@ pipeline:
     image: "casperlabs/buildenv:latest"
     when:
       event:
-        - push
+        - tag
       ref:
         - refs/tags/v*
 
@@ -479,7 +479,7 @@ pipeline:
       - github_token
     when:
       event:
-        - push
+        - tag
       ref:
         - refs/tags/v*
 
