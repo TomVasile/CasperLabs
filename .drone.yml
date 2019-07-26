@@ -366,19 +366,6 @@ pipeline:
       event:
         - push
 
-  github_publish_release_artifacts:
-    checksum:
-      - sha256
-      - md5
-    files:
-      - "artifacts/${DRONE_BRANCH}/*"
-    image: plugins/github-release
-    prerelease: true
-    secrets:
-      - github_token
-    when:
-      branch: master
-
   docker-publish:
     commands: |
       echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
