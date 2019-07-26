@@ -442,7 +442,7 @@ pipeline:
 #        - push
 
 # Run only on tagged release version
-  package-sbt-artifacts-merge:
+  package-sbt-artifacts-tag:
     commands:
       - "make clean"
       - "make build-validator-contracts"
@@ -461,7 +461,7 @@ pipeline:
       ref:
         - refs/tags/v*
 
-  package-ee:
+  package-ee-tag:
     commands:
       - "mkdir -p artifacts/${DRONE_BRANCH}"
       - "make clean"
