@@ -42,6 +42,7 @@ clone:
 # bind source path does not exist: /var/cache/cl-build/.sbt
 #      2. Groups were replaced for a new depends_on feature in 1.*. These do not behave
 # exactly the same.
+---
 kind: pipeline
 name: branches
 
@@ -77,6 +78,7 @@ volumes:
   host:
     path: "/var/run/docker.sock"
 
+---
 kind: pipeline
 name: tagger
 
