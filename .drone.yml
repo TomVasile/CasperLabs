@@ -108,6 +108,22 @@ steps:
   depends_on:
   - rust-compile-test-pr
 
+# This section is for bors' branches only
+- name: sbt-test-docker-bors
+  commands:
+  - "sbt test"
+  - "make docker-build/node docker-build/client"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock	
+    path: "/var/run/docker.sock"
+  when:
+    branch:
+    - staging
+    - trying
+
 - name: cleanup
   commands:
   - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
@@ -123,8 +139,12 @@ steps:
     - failure
     - success
   depends_on:
+  - sbt-compile-test-pr
+  - git-status-post-scala-compile-pr
+  - rust-compile-test-pr
+  - run-cargo-fmt-pr
   - run-rust-lints-pr
-  - blah
+  - sbt-test-docker-bors
 
 - name: notify
   channel: alerts
@@ -139,6 +159,11 @@ steps:
   when:
     status:
     - failure
+
+volumes:
+- name: docker_sock
+  host:
+    path: "/var/run/docker.sock"
 
 # Signature for Drone
 ---
