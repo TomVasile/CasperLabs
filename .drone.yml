@@ -46,10 +46,6 @@ clone:
 kind: pipeline
 name: default
 
-trigger:
-  branch:
-  - test-op323
-
 steps:
 - name: test-ls
   commands:
@@ -72,6 +68,10 @@ steps:
     status:
     - failure
     - success
+    
+trigger:
+  branch:
+  - test-op323
 
 volumes:
 - name: docker_sock
