@@ -49,7 +49,7 @@ steps:
   commands:
   - "sbt test"
   environment:
-  _JAVA_OPTIONS:"-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
   when:
     event:
