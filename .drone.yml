@@ -97,7 +97,8 @@ steps:
   _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - "/var/run/docker.sock:/var/run/docker.sock"
+  - name: docker_sock
+    path: "/var/run/docker.sock"
   when:
     ref:
     - refs/tags/v*
@@ -138,11 +139,17 @@ steps:
   _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - "/var/run/docker.sock:/var/run/docker.sock"
+  - name: docker_sock
+    path: "/var/run/docker.sock"
   when:
     status:
     - failure
     - success
+
+volumes:
+- name: docker_sock
+  host:
+    path: "/var/run/docker.sock"
 
 # Signature for Drone
 ---
