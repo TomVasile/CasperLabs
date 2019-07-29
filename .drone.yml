@@ -45,8 +45,9 @@ clone:
 # exactly the same.
 pipeline:
 
-branches:
-  - test-op323
+trigger:
+  branch:
+    - test-op323
 
   test-ls:
     commands:
