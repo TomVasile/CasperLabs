@@ -234,8 +234,8 @@ steps:
     branch:
     - staging
     - trying
-#  depends_on:
-#  - docker-build-ee-int-bors
+  depends_on:
+  - docker-build-ee-int-bors
 
 - name: run-integration-tests
   commands:
