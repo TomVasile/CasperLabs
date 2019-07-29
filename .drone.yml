@@ -114,7 +114,7 @@ pipeline:
       ref:
         - refs/tags/v*
 
-  cleanup:
+  cleanup-tag:
     commands:
       - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
       - "docker images | grep \"DRONE-${DRONE_BUILD_NUMBER}\" | awk '{print $3}' | xargs --no-run-if-empty docker rmi -f || true"
