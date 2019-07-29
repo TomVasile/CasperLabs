@@ -280,14 +280,14 @@ steps:
   - run-rust-lints-pr
   - sbt-test-docker-bors
   - git-status-post-scala-compile-bors
-  - rust-compile-test-bors
-  - run-cargo-fmt-bors
-  - run-rust-lints-bors
-  - try-cargo-publish-bors
-  - run-rust-benchmarks-bors
-  - docker-build-ee-int-bors
-  - docker-keys-gen-test-bors
-  - run-integration-tests
+#  - rust-compile-test-bors
+#  - run-cargo-fmt-bors
+#  - run-rust-lints-bors
+#  - try-cargo-publish-bors
+#  - run-rust-benchmarks-bors
+#  - docker-build-ee-int-bors
+#  - docker-keys-gen-test-bors
+#  - run-integration-tests
 
 - name: notify
   channel: alerts
