@@ -44,7 +44,7 @@ clone:
 # exactly the same.
 ---
 kind: pipeline
-name: branches
+name: default
 
 steps:
 - name: test-ls
