@@ -44,6 +44,10 @@ clone:
 #      2. Groups were replaced for a new depends_on feature in 1.*. These do not behave
 # exactly the same.
 pipeline:
+
+branches:
+  - test-op323
+
   test-ls:
     commands:
       - ls -l
