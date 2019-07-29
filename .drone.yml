@@ -63,6 +63,8 @@ pipeline:
     when:
       event:
         - pull_request
+    depends_on:
+      - sbt-compile-test-pr
 
   rust-compile-test-pr:
     commands:
@@ -87,6 +89,8 @@ pipeline:
     when:
       event:
         - pull_request
+    depends_on:
+      - rust-compile-test-pr
 
   run-rust-lints-pr:
     commands:
@@ -98,6 +102,8 @@ pipeline:
     when:
       event:
         - pull_request
+    depends_on:
+      - rust-compile-test-pr
 
 # This section is for bors' branches only
   sbt-test-docker-bors:
