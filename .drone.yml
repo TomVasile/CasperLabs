@@ -234,8 +234,8 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - docker-build-ee-int-bors
+#  depends_on:
+#  - docker-build-ee-int-bors
 
 - name: run-integration-tests
   commands:
@@ -255,8 +255,8 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - docker-build-ee-int-bor
+#  depends_on:
+#  - docker-build-ee-int-bor
 
 - name: cleanup
   commands:
