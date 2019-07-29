@@ -43,67 +43,67 @@ clone:
 #      2. Groups were replaced for a new depends_on feature in 1.*. These do not behave
 # exactly the same.
 pipeline:
-
+steps:
 # Below is for pull_request webhooks only
-  sbt-compile-test-pr:
-    commands:
-      - "sbt test"
-    environment:
-      - "_JAVA_OPTIONS=-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-    image: "casperlabs/buildenv:latest"
-    when:
-      event:
-        - pull_request
+- name: sbt-compile-test-pr
+  commands:
+  - "sbt test"
+  environment:
+  _JAVA_OPTIONS:"-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  when:
+    event:
+    - pull_request
 
-  git-status-post-scala-compile-pr:
-    commands: |
-      STATUS_CHECK=$(git status)
-      if echo $STATUS_CHECK | grep -q "modified" ; then echo "$STATUS_CHECK"; exit 1; fi
-    image: "casperlabs/buildenv:latest"
-    when:
-      event:
-        - pull_request
-    depends_on:
-      - sbt-compile-test-pr
+- name: git-status-post-scala-compile-pr
+  commands: |
+    STATUS_CHECK=$(git status)
+    if echo $STATUS_CHECK | grep -q "modified" ; then echo "$STATUS_CHECK"; exit 1; fi
+  image: "casperlabs/buildenv:latest"
+  when:
+    event:
+    - pull_request
+  depends_on:
+  - sbt-compile-test-pr
 
-  rust-compile-test-pr:
-    commands:
-      - "cd execution-engine/"
-      - "~/.cargo/bin/cargo --locked build"
-      - "~/.cargo/bin/cargo --locked test"
-      - "./scripts/run-contract-tests.sh"
-      - "cd ../long-running-tests"
-      - "./build-contracts.sh"
-    image: "casperlabs/buildenv:latest"
-    when:
-      event:
-        - pull_request
+- name: rust-compile-test-pr
+  commands:
+  - "cd execution-engine/"
+  - "~/.cargo/bin/cargo --locked build"
+  - "~/.cargo/bin/cargo --locked test"
+  - "./scripts/run-contract-tests.sh"
+  - "cd ../long-running-tests"
+  - "./build-contracts.sh"
+  image: "casperlabs/buildenv:latest"
+  when:
+    event:
+    - pull_request
 
-  run-cargo-fmt-pr:
-    commands:
-      - "cd execution-engine"
-      - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
-      - "~/.cargo/bin/rustup component add --toolchain=$(cat rust-toolchain) rustfmt"
-      - "~/.cargo/bin/cargo fmt --all -- --check"
-    image: "casperlabs/buildenv:latest"
-    when:
-      event:
-        - pull_request
-    depends_on:
-      - rust-compile-test-pr
+- name: run-cargo-fmt-pr
+  commands:
+  - "cd execution-engine"
+  - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
+  - "~/.cargo/bin/rustup component add --toolchain=$(cat rust-toolchain) rustfmt"
+  - "~/.cargo/bin/cargo fmt --all -- --check"
+  image: "casperlabs/buildenv:latest"
+  when:
+    event:
+    - pull_request
+  depends_on:
+  - rust-compile-test-pr
 
-  run-rust-lints-pr:
-    commands:
-      - "cd execution-engine"
-      - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
-      - "~/.cargo/bin/rustup component add --toolchain=$(cat rust-toolchain) clippy"
-      - "~/.cargo/bin/cargo clippy --all-targets --all -- -D warnings -A renamed_and_removed_lints"
-    image: "casperlabs/buildenv:latest"
-    when:
-      event:
-        - pull_request
-    depends_on:
-      - rust-compile-test-pr
+- name: run-rust-lints-pr
+  commands:
+  - "cd execution-engine"
+  - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
+  - "~/.cargo/bin/rustup component add --toolchain=$(cat rust-toolchain) clippy"
+  - "~/.cargo/bin/cargo clippy --all-targets --all -- -D warnings -A renamed_and_removed_lints"
+  image: "casperlabs/buildenv:latest"
+  when:
+    event:
+    - pull_request
+  depends_on:
+  - rust-compile-test-pr
 
 # This section is for bors' branches only
   sbt-test-docker-bors:
