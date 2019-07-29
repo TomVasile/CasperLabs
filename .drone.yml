@@ -22,18 +22,9 @@
 #  - testing*
 #  - trying
 #  - staging
+#  - test-op323
 
-
-#NOTE: 1. Had to remove cached .sbt/.ivy2 dirs for drone autoscaling. This is because
-# drone uses docker bind mounts which do not create the host dir if it is nonexistent,
-# resulting in Error response from daemon: invalid mount config for type "bind":
-# bind source path does not exist: /var/cache/cl-build/.sbt
-#      2. Groups were replaced for a new depends_on feature in 1.*. These do not behave
-# exactly the same.
----
-kind: pipeline
-name: default
-
+# Begin
 clone:
   git-clone:
     commands: |
@@ -46,113 +37,74 @@ clone:
       git rev-parse HEAD
     image: "casperlabs/buildenv:latest"
 
-steps:
-- name: test-ls
-  commands:
-  - ls -l
-  environment:
-  _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-    
-- name: cleanup
-  commands:
-  - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
-  - "docker images | grep \"DRONE-${DRONE_BUILD_NUMBER}\" | awk '{print $3}' | xargs --no-run-if-empty docker rmi -f || true"
-  environment:
-  _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock
-    path: "/var/run/docker.sock"
-  when:
-    status:
-    - failure
-    - success
-    
-trigger:
-  branch:
-  - test-op323
-
-volumes:
-- name: docker_sock
-  host:
-    path: "/var/run/docker.sock"
-
----
-kind: pipeline
-name: tagger
-
+#NOTE: 1. Had to remove cached .sbt/.ivy2 dirs for drone autoscaling. This is because
+# drone uses docker bind mounts which do not create the host dir if it is nonexistent,
+# resulting in Error response from daemon: invalid mount config for type "bind":
+# bind source path does not exist: /var/cache/cl-build/.sbt
+#      2. Groups were replaced for a new depends_on feature in 1.*. These do not behave
+# exactly the same.
+pipeline:
 # Run only on tagged release version
-steps:
-- name: package-sbt-artifacts-tag
-  commands:
-  - "make clean"
-  - "make build-validator-contracts"
-  - "sbt update test client/debian:packageBin client/universal:packageZipTarball client/rpm:packageBin node/debian:packageBin node/universal:packageZipTarball node/rpm:packageBin node/docker:publishLocal client/docker:publishLocal"
-  - "mkdir -p artifacts/${DRONE_BRANCH}"
-  - "cp client/target/casperlabs-client_*_all.deb client/target/universal/*.tgz artifacts/${DRONE_BRANCH}"
-  - "cp client/target/rpm/RPMS/noarch/casperlabs-client-*.noarch.rpm artifacts/${DRONE_BRANCH}"
-  - "cp node/target/casperlabs-node_*_all.deb node/target/universal/*.tgz artifacts/${DRONE_BRANCH}"
-  - "cp node/target/rpm/RPMS/noarch/casperlabs-node-*.noarch.rpm artifacts/${DRONE_BRANCH}"
-  environment:
-  _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock
-    path: "/var/run/docker.sock"
-  when:
-    ref:
-    - refs/tags/v*
+  package-sbt-artifacts-tag:
+    commands:
+      - "make clean"
+      - "make build-validator-contracts"
+      - "sbt update test client/debian:packageBin client/universal:packageZipTarball client/rpm:packageBin node/debian:packageBin node/universal:packageZipTarball node/rpm:packageBin node/docker:publishLocal client/docker:publishLocal"
+      - "mkdir -p artifacts/${DRONE_BRANCH}"
+      - "cp client/target/casperlabs-client_*_all.deb client/target/universal/*.tgz artifacts/${DRONE_BRANCH}"
+      - "cp client/target/rpm/RPMS/noarch/casperlabs-client-*.noarch.rpm artifacts/${DRONE_BRANCH}"
+      - "cp node/target/casperlabs-node_*_all.deb node/target/universal/*.tgz artifacts/${DRONE_BRANCH}"
+      - "cp node/target/rpm/RPMS/noarch/casperlabs-node-*.noarch.rpm artifacts/${DRONE_BRANCH}"
+    environment:
+      - "_JAVA_OPTIONS=-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+    image: "casperlabs/buildenv:latest"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    when:
+      ref:
+        - refs/tags/v*
 
-- name: package-ee-tag
-  commands:
-  - "mkdir -p artifacts/${DRONE_BRANCH}"
-  - "make clean"
-  - "make cargo-package-all"
-  - "cp execution-engine/target/blessed-contracts.tar.gz artifacts/${DRONE_BRANCH}"
-  - "cp execution-engine/target/debian/casperlabs-engine-grpc-server_*.deb artifacts/${DRONE_BRANCH}"
-  - "cp execution-engine/target/release/rpmbuild/RPMS/x86_64/casperlabs-engine-grpc-server-*.rpm artifacts/${DRONE_BRANCH}"
-  - "WORKING_DIR=$(pwd) ; cd execution-engine/target/release/rpmbuild/SOURCES ; OS=$(uname -s | tr '[:upper:]' '[:lower:]') ; ARCH=$(uname -p) ; SOURCE=$(ls casperlabs-engine-grpc-server-*.tar.gz | sed \"s/.tar.gz//\") ; TARGET=$(ls $SOURCE*.tar.gz | sed \"s/.tar.gz/_\"$OS\"_\"$ARCH\".tar.gz/\") ; tar -xzf $SOURCE.tar.gz ; tar -czf $TARGET -C $SOURCE/usr/bin/ . && cp $TARGET $WORKING_DIR/artifacts/${DRONE_BRANCH}"
-  image: "casperlabs/buildenv:latest"
-  when:
-    ref:
-    - refs/tags/v*
+  package-ee-tag:
+    commands:
+      - "mkdir -p artifacts/${DRONE_BRANCH}"
+      - "make clean"
+      - "make cargo-package-all"
+      - "cp execution-engine/target/blessed-contracts.tar.gz artifacts/${DRONE_BRANCH}"
+      - "cp execution-engine/target/debian/casperlabs-engine-grpc-server_*.deb artifacts/${DRONE_BRANCH}"
+      - "cp execution-engine/target/release/rpmbuild/RPMS/x86_64/casperlabs-engine-grpc-server-*.rpm artifacts/${DRONE_BRANCH}"
+      - "WORKING_DIR=$(pwd) ; cd execution-engine/target/release/rpmbuild/SOURCES ; OS=$(uname -s | tr '[:upper:]' '[:lower:]') ; ARCH=$(uname -p) ; SOURCE=$(ls casperlabs-engine-grpc-server-*.tar.gz | sed \"s/.tar.gz//\") ; TARGET=$(ls $SOURCE*.tar.gz | sed \"s/.tar.gz/_\"$OS\"_\"$ARCH\".tar.gz/\") ; tar -xzf $SOURCE.tar.gz ; tar -czf $TARGET -C $SOURCE/usr/bin/ . && cp $TARGET $WORKING_DIR/artifacts/${DRONE_BRANCH}"
+    image: "casperlabs/buildenv:latest"
+    when:
+      ref:
+        - refs/tags/v*
 
-- name: github_publish_release_artifacts
-  checksum:
-  - sha256
-  - md5
-  files:
-  - "artifacts/${DRONE_BRANCH}/*"
-  image: plugins/github-release
-  prerelease: true
-  secrets:
-    - github_token
-  when:
-    ref:
-    - refs/tags/v*
+  github_publish_release_artifacts:
+    checksum:
+      - sha256
+      - md5
+    files:
+      - "artifacts/${DRONE_BRANCH}/*"
+    image: plugins/github-release
+    prerelease: true
+    secrets:
+      - github_token
+    when:
+      ref:
+        - refs/tags/v*
 
-- name: cleanup-tag
-  commands:
-  - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
-  - "docker images | grep \"DRONE-${DRONE_BUILD_NUMBER}\" | awk '{print $3}' | xargs --no-run-if-empty docker rmi -f || true"
-  environment:
-  _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock
-    path: "/var/run/docker.sock"
-  when:
-    ref:
-    - refs/tags/v*
-    status:
-    - failure
-    - success
-
-volumes:
-- name: docker_sock
-  host:
-    path: "/var/run/docker.sock"
+  cleanup:
+    commands:
+      - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
+      - "docker images | grep \"DRONE-${DRONE_BUILD_NUMBER}\" | awk '{print $3}' | xargs --no-run-if-empty docker rmi -f || true"
+    environment:
+      - "_JAVA_OPTIONS=-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+    image: "casperlabs/buildenv:latest"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    when:
+      status:
+        - failure
+        - success
 
 # Signature for Drone
 ---
