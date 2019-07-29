@@ -124,6 +124,136 @@ steps:
     - staging
     - trying
 
+- name: git-status-post-scala-compile-bors
+  commands:
+  - STATUS_CHECK=$(git status)
+  - echo $STATUS_CHECK
+  - if echo $STATUS_CHECK | grep -q "modified" ; then echo "$STATUS_CHECK"; exit 1; fi
+  image: "casperlabs/buildenv:latest"
+  when:
+    branch:
+    - staging
+    - trying
+  depends_on:
+  - sbt-test-docker-bors
+
+- name: rust-compile-test-bors
+  commands:
+  - "cd execution-engine/"
+  - "~/.cargo/bin/cargo --locked build"
+  - "~/.cargo/bin/cargo --locked test"
+  image: "casperlabs/buildenv:latest"
+  when:
+    branch:
+    - staging
+    - trying
+
+- name: run-cargo-fmt-bors
+  commands:
+  - "cd execution-engine"
+  - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
+  - "~/.cargo/bin/rustup component add --toolchain=$(cat rust-toolchain) rustfmt"
+  - "~/.cargo/bin/cargo fmt --all -- --check"
+  image: "casperlabs/buildenv:latest"
+  when:
+    branch:
+    - staging
+    - trying
+  depends_on:
+  - rust-compile-test-bors
+
+- name: run-rust-lints-bors
+  commands:
+  - "cd execution-engine"
+  - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
+  - "~/.cargo/bin/rustup component add --toolchain=$(cat rust-toolchain) clippy"
+  - "~/.cargo/bin/cargo clippy --all-targets --all -- -D warnings -A renamed_and_removed_lints"
+  image: "casperlabs/buildenv:latest"
+  when:
+    branch:
+    - staging
+    - trying
+  depends_on:
+  - rust-compile-test-bors
+
+- name: try-cargo-publish-bors
+  commands:
+  - "cd execution-engine/common"
+  - "~/.cargo/bin/cargo publish --dry-run"
+  image: "casperlabs/buildenv:latest"
+  when:
+    branch:
+    - staging
+    - trying
+  depends_on:
+  - rust-compile-test-bors
+
+- name: run-rust-benchmarks-bors
+  commands:
+  - "cd execution-engine/"
+  - "~/.cargo/bin/cargo bench"
+  image: "casperlabs/buildenv:latest"
+  when:
+    branch:
+    - staging
+    - trying
+  depends_on:
+  - rust-compile-test-bors
+
+- name: docker-build-ee-int-bors:
+  commands:
+  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
+  - "./integration-testing/contracts/build_contracts.sh"
+  - "make docker-build/execution-engine"
+  - "make docker-build/integration-testing"
+  - "make docker-build/key-generator"
+  - "make docker-build/explorer"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock	
+    path: "/var/run/docker.sock"
+  when:
+    branch:
+    - staging
+    - trying
+
+- name: docker-keys-gen-test-bors
+  commands:
+  - "mkdir /tmp/keys-DRONE-${DRONE_BUILD_NUMBER}"
+  - "./hack/key-management/docker-gen-keys.sh /tmp/keys-DRONE-${DRONE_BUILD_NUMBER} --test"
+  - "rm -rf /tmp/keys-DRONE-${DRONE_BUILD_NUMBER}"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock	
+    path: "/var/run/docker.sock"
+  - name: temp
+    path: "/tmp"
+  when:
+    branch:
+    - staging
+    - trying
+
+- name: run-integration-tests
+  commands:
+  - "apt-get update && apt-get -y install gcc"
+  - "python3 -m pip install pipenv pytest dataclasses typing_extensions dataclasses grpcio grpcio_tools protobuf in-place ed25519 pyblake2"
+  - "cd integration-testing"
+  - "./docker_run_tests.sh"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock	
+    path: "/var/run/docker.sock"
+  - name: temp
+    path: "/tmp"
+  when:
+    branch:
+    - staging
+    - trying
+
 - name: cleanup
   commands:
   - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
@@ -164,6 +294,9 @@ volumes:
 - name: docker_sock
   host:
     path: "/var/run/docker.sock"
+- name: temp
+  host:
+    path: "/tmp"
 
 # Signature for Drone
 ---
