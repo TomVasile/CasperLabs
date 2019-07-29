@@ -218,6 +218,8 @@ steps:
     branch:
     - staging
     - trying
+  depends_on:
+  - rust-compile-test-bors
 
 - name: docker-keys-gen-test-bors
   commands:
