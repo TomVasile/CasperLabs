@@ -122,6 +122,9 @@ steps:
     status:
     - failure
     - success
+  depends_on:
+  - run-rust-lints-pr
+  - blah
 
 - name: notify
   channel: alerts
