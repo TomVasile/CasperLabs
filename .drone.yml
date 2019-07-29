@@ -142,6 +142,8 @@ steps:
   - name: docker_sock
     path: "/var/run/docker.sock"
   when:
+    ref:
+    - refs/tags/v*
     status:
     - failure
     - success
