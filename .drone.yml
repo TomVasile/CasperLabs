@@ -15,13 +15,13 @@
 #    - "/var/cache/cl-build/.sbt:/root/.sbt"
 #    - "/var/cache/cl-build/.ivy2:/root/.ivy2"
 #
-branches:
-  - dev
-  - master
-  - release-*
-  - testing*
-  - trying
-  - staging
+#branches:
+#  - dev
+#  - master
+#  - release-*
+#  - testing*
+#  - trying
+#  - staging
 
 # Begin
 clone:
@@ -255,8 +255,8 @@ steps:
     branch:
     - staging
     - trying
-#  depends_on:
-#  - docker-build-ee-int-bor
+  depends_on:
+  - docker-build-ee-int-bors
 
 - name: cleanup
   commands:
@@ -301,6 +301,15 @@ volumes:
 - name: temp
   host:
     path: "/tmp"
+
+trigger:
+  branch:
+  - dev
+  - master
+  - "release-*"
+  - "testing*"
+  - trying
+  - staging
 
 # Signature for Drone
 ---
