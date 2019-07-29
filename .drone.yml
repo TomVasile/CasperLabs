@@ -44,6 +44,30 @@ clone:
 #      2. Groups were replaced for a new depends_on feature in 1.*. These do not behave
 # exactly the same.
 pipeline:
+  test-ls
+    commands:
+      - ls -l
+    environment:
+      - "_JAVA_OPTIONS=-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+    image: "casperlabs/buildenv:latest"
+    
+  cleanup:
+    commands:
+      - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
+      - "docker images | grep \"DRONE-${DRONE_BUILD_NUMBER}\" | awk '{print $3}' | xargs --no-run-if-empty docker rmi -f || true"
+    environment:
+      - "_JAVA_OPTIONS=-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+    image: "casperlabs/buildenv:latest"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    when:
+      status:
+        - failure
+        - success
+
+pipeline:
+  name:
+    - tag
 # Run only on tagged release version
   package-sbt-artifacts-tag:
     commands:
