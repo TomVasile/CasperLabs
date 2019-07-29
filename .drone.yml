@@ -43,6 +43,8 @@ clone:
 #      2. Groups were replaced for a new depends_on feature in 1.*. These do not behave
 # exactly the same.
 kind: pipeline
+name: run
+
 steps:
 # Below is for pull_request webhooks only
 - name: sbt-compile-test-pr
