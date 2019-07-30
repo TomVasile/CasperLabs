@@ -222,8 +222,7 @@ steps:
     - staging
     - trying
   depends_on:
-  - rust-compile-test-bors
-  - sbt-test-docker-bors
+  - run-rust-benchmarks-bors
 
 - name: docker-keys-gen-test-bors
   commands:
