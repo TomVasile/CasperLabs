@@ -109,26 +109,6 @@ steps:
   - rust-compile-test-pr
 
 # This section is for bors' branches only
-- name: docker-build-ee-int-bors
-  commands:
-  - "make clean"
-  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
-  - "./integration-testing/contracts/build_contracts.sh"
-  - "make docker-build/execution-engine"
-  - "make docker-build/integration-testing"
-  - "make docker-build/key-generator"
-  - "make docker-build/explorer"
-  environment:
-    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock	
-    path: "/var/run/docker.sock"
-  when:
-    branch:
-    - staging
-    - trying
-
 - name: sbt-test-docker-bors
   commands:
   - "sbt test"
@@ -143,8 +123,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - docker-build-ee-int-bors
 
 - name: git-status-post-scala-compile-bors
   commands:
@@ -170,7 +148,7 @@ steps:
     - staging
     - trying
   depends_on:
-  - docker-build-ee-int-bors
+  - sbt-test-docker-bors
 
 - name: run-cargo-fmt-bors
   commands:
@@ -217,6 +195,28 @@ steps:
   - "cd execution-engine/"
   - "~/.cargo/bin/cargo bench"
   image: "casperlabs/buildenv:latest"
+  when:
+    branch:
+    - staging
+    - trying
+  depends_on:
+  - rust-compile-test-bors
+
+- name: docker-build-ee-int-bors
+  commands:
+  - "make clean"
+  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
+  - "./integration-testing/contracts/build_contracts.sh"
+  - "make docker-build/execution-engine"
+  - "make docker-build/integration-testing"
+  - "make docker-build/key-generator"
+  - "make docker-build/explorer"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock	
+    path: "/var/run/docker.sock"
   when:
     branch:
     - staging
