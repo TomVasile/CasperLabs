@@ -123,6 +123,8 @@ steps:
     branch:
     - staging
     - trying
+  depends_on:
+  - docker-build-ee-int-bors
 
 - name: git-status-post-scala-compile-bors
   commands:
@@ -147,6 +149,8 @@ steps:
     branch:
     - staging
     - trying
+  depends_on:
+  - docker-build-ee-int-bors
 
 - name: run-cargo-fmt-bors
   commands:
@@ -219,9 +223,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - rust-compile-test-bors
-  - sbt-test-docker-bors
 
 - name: docker-keys-gen-test-bors
   commands:
