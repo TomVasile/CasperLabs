@@ -220,6 +220,7 @@ steps:
     - trying
   depends_on:
   - rust-compile-test-bors
+  - run-rust-benchmarks-bors
 
 - name: docker-keys-gen-test-bors
   commands:
