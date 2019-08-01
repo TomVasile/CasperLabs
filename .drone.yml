@@ -199,6 +199,7 @@ steps:
     - trying
   depends_on:
   - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: docker-build-ee-int-bors
   commands:
@@ -220,6 +221,7 @@ steps:
     - trying
   depends_on:
   - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: docker-keys-gen-test-bors
   commands:
