@@ -221,7 +221,7 @@ steps:
     - staging
     - trying
   depends_on:
-  - run-rust-benchmarks-bors
+  - rust-compile-test-bors
 
 - name: docker-keys-gen-test-bors
   commands:
@@ -260,8 +260,6 @@ steps:
     - staging
     - trying
   depends_on:
-  - sbt-test-docker-bors
-  - rust-compile-test-bors
   - docker-build-ee-int-bors
 
 - name: cleanup
