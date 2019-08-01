@@ -147,8 +147,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - sbt-test-docker-bors
 
 - name: run-cargo-fmt-bors
   commands:
