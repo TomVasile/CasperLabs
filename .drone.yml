@@ -413,7 +413,7 @@ steps:
     - push
 
 - name: docker-publish
-  commands: |
+  commands: |-
     echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
     if [ ! -z ${DRONE_TAG} ]; then
       REF=${DRONE_TAG}
