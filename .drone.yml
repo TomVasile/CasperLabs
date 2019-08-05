@@ -113,7 +113,7 @@ steps:
 - name: sbt-test-docker-bors
   commands:
   - "sbt test"
-  - "make clean docker-build/node docker-build/client"
+  - "make docker-build/node docker-build/client"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
@@ -139,10 +139,11 @@ steps:
   - sbt-test-docker-bors
 
 - name: rust-compile-test-bors
+  environment:
+    CARGO_FLAGS: "--locked"
   commands:
   - "cd execution-engine/"
-  - "~/.cargo/bin/cargo --locked build"
-  - "~/.cargo/bin/cargo --locked test"
+  - "make test"
   image: "casperlabs/buildenv:latest"
   when:
     branch:
@@ -156,7 +157,7 @@ steps:
   - "cd execution-engine"
   - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
   - "~/.cargo/bin/rustup component add --toolchain=$(cat rust-toolchain) rustfmt"
-  - "~/.cargo/bin/cargo fmt --all -- --check"
+  - "make check-format"
   image: "casperlabs/buildenv:latest"
   when:
     branch:
@@ -170,7 +171,7 @@ steps:
   - "cd execution-engine"
   - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
   - "~/.cargo/bin/rustup component add --toolchain=$(cat rust-toolchain) clippy"
-  - "~/.cargo/bin/cargo clippy --all-targets --all -- -D warnings -A renamed_and_removed_lints"
+  - "make lint"
   image: "casperlabs/buildenv:latest"
   when:
     branch:
@@ -182,7 +183,7 @@ steps:
 - name: try-cargo-publish-bors
   commands:
   - "cd execution-engine/common"
-  - "~/.cargo/bin/cargo publish --dry-run"
+  - "make check-publish"
   image: "casperlabs/buildenv:latest"
   when:
     branch:
@@ -194,7 +195,7 @@ steps:
 - name: run-rust-benchmarks-bors
   commands:
   - "cd execution-engine/"
-  - "~/.cargo/bin/cargo bench"
+  - "make bench"
   image: "casperlabs/buildenv:latest"
   when:
     branch:
