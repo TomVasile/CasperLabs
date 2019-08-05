@@ -70,11 +70,12 @@ steps:
   - sbt-compile-test-pr
 
 - name: rust-compile-test-pr
+  environment:
+    CARGO_FLAGS: "--locked"
   commands:
   - "cd execution-engine/"
-  - "~/.cargo/bin/cargo --locked build"
-  - "~/.cargo/bin/cargo --locked test"
-  - "./scripts/run-contract-tests.sh"
+  - "rustup target add --toolchain $(cat rust-toolchain) wasm32-unknown-unknown"
+  - "make test test-contracts"
   - "cd ../long-running-tests"
   - "./build-contracts.sh"
   image: "casperlabs/buildenv:latest"
@@ -87,7 +88,7 @@ steps:
   - "cd execution-engine"
   - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
   - "~/.cargo/bin/rustup component add --toolchain=$(cat rust-toolchain) rustfmt"
-  - "~/.cargo/bin/cargo fmt --all -- --check"
+  - "make check-format"
   image: "casperlabs/buildenv:latest"
   when:
     event:
@@ -100,7 +101,7 @@ steps:
   - "cd execution-engine"
   - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
   - "~/.cargo/bin/rustup component add --toolchain=$(cat rust-toolchain) clippy"
-  - "~/.cargo/bin/cargo clippy --all-targets --all -- -D warnings -A renamed_and_removed_lints"
+  - "make lint"
   image: "casperlabs/buildenv:latest"
   when:
     event:
