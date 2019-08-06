@@ -364,6 +364,26 @@ steps:
 #  - package-sbt-artifacts-merge
 #  - package-ee
 
+- name: make-clean-before-package
+  commands:
+  - "make clean"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  when:
+    branch:
+    - dev
+    - release-*
+    - master
+    event:
+    - push
+  depends_on:
+  - rust-compile-for-make
+  - docker-build-ee-merge
+  - docker-key-gen-merge
+  - docker-explorer-merge
+  - docker-grpcwebproxy-merge
+
 - name: package-sbt-artifacts-merge
   commands:
 #  - "make clean"
@@ -388,11 +408,7 @@ steps:
     event:
     - push
   depends_on:
-  - rust-compile-for-make
-  - docker-build-ee-merge
-  - docker-key-gen-merge
-  - docker-explorer-merge
-  - docker-grpcwebproxy-merge
+  - make-clean-before-package
 
 - name: package-ee
   commands:
@@ -412,11 +428,7 @@ steps:
     event:
     - push
   depends_on:
-  - rust-compile-for-make
-  - docker-build-ee-merge
-  - docker-key-gen-merge
-  - docker-explorer-merge
-  - docker-grpcwebproxy-merge
+  - make-clean-before-package
 
 - name: rsync-artifacts
   image: drillster/drone-rsync
