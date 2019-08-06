@@ -74,6 +74,7 @@ steps:
   environment:
     CARGO_FLAGS: "--locked"
   commands:
+  - "exit 1"
   - "cd execution-engine/"
   - "rustup target add --toolchain $(cat rust-toolchain) wasm32-unknown-unknown"
   - "make test test-contracts"
