@@ -545,6 +545,31 @@ steps:
   when:
     status:
     - failure
+  depends_on:
+  - sbt-compile-test-pr
+  - git-status-post-scala-compile-pr
+  - rust-compile-test-pr
+  - run-cargo-fmt-pr
+  - run-rust-lints-pr
+  - sbt-test-docker-bors
+  - git-status-post-scala-compile-bors
+  - rust-compile-test-bors
+  - run-cargo-fmt-bors
+  - run-rust-lints-bors
+  - try-cargo-publish-bors
+  - run-rust-benchmarks-bors
+  - docker-build-ee-int-bors
+  - docker-keys-gen-test-bors
+  - run-integration-tests
+  - rust-compile-for-make
+  - docker-build-ee-merge
+  - docker-key-gen-merge
+  - docker-explorer-merge
+  - docker-grpcwebproxy-merge
+  - package-sbt-artifacts-merge
+  - package-ee
+  - rsync-artifacts
+#  - docker-publish
 
 volumes:
 - name: docker_sock
