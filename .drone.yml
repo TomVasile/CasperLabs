@@ -182,7 +182,7 @@ steps:
 
 - name: try-cargo-publish-bors
   commands:
-  - "cd execution-engine/common"
+  - "cd execution-engine"
   - "make check-publish"
   image: "casperlabs/buildenv:latest"
   when:
