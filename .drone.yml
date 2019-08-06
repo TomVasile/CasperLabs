@@ -533,6 +533,8 @@ steps:
 - name: notify
   image: plugins/slack
   settings:
+    webhook:
+      from_secret: slack_webhook
     channel: alerts
     template: 
     - |
@@ -540,9 +542,6 @@ steps:
       Author: {{ build.author }}
       Drone Build: <{{ build.link }}|#{{ build.number }}>
       Commit Link: <https://github.com/{{repo.owner}}/{{repo.name}}/commit/{{build.commit}}|{{ truncate build.commit 10 }}>
-  environment:
-    SLACK_WEBHOOK:
-      from_secret: slack_webhook
   when:
     status:
     - failure
