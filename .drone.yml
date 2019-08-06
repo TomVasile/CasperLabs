@@ -366,7 +366,7 @@ steps:
 
 - name: package-sbt-artifacts-merge
   commands:
-  - "make clean"
+#  - "make clean"
   - "make build-client-contracts"
   - "sbt update test client/debian:packageBin client/universal:packageZipTarball client/rpm:packageBin node/debian:packageBin node/universal:packageZipTarball node/rpm:packageBin node/docker:publishLocal client/docker:publishLocal"
   - "mkdir -p artifacts/${DRONE_BRANCH}"
@@ -397,7 +397,7 @@ steps:
 - name: package-ee
   commands:
   - "mkdir -p artifacts/${DRONE_BRANCH}"
-  - "make clean"
+#  - "make clean"
   - "make cargo-package-all"
   - "cp execution-engine/target/system-contracts.tar.gz artifacts/${DRONE_BRANCH}"
   - "cp execution-engine/target/debian/casperlabs-engine-grpc-server_*.deb artifacts/${DRONE_BRANCH}"
