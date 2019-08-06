@@ -55,6 +55,16 @@ steps:
     event:
     - pull_request
 
+- name: test-slack-notify1
+  commands:
+  - "exit 1"
+  image: "casperlabs/buildenv:latest"
+  when:
+    event:
+    - pull_request
+  depends_on:
+  - test-slack-notify
+
 - name: notify
   image: plugins/slack
   settings:
