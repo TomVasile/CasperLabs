@@ -49,6 +49,7 @@ steps:
 # Below is for pull_request webhooks only
 - name: sbt-compile-test-pr
   commands:
+  - "exit 1"
   - "sbt test"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
