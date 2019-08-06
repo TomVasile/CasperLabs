@@ -80,6 +80,9 @@ steps:
   when:
     status:
     - failure
+  depends_on:
+  - test-slack-notify
+  - test-slack-notify1
 
 trigger:
   branch:
