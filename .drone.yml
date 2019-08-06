@@ -268,87 +268,6 @@ steps:
   - docker-build-ee-int-bors
 
 # The below section is for post-bors push webhooks
-- name: rust-compile-for-make
-  environment:
-    CARGO_FLAGS: "--locked"
-  commands:
-  - "cd execution-engine"
-  - "make build"
-  image: "casperlabs/buildenv:latest"
-  when:
-    branch:
-    - dev
-    - release-*
-    - master
-    event:
-    - push
-
-- name: docker-build-ee-merge
-  commands:
-  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
-  - "make docker-build/execution-engine"
-  environment:
-    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock	
-    path: "/var/run/docker.sock"
-  when:
-    branch:
-    - dev
-    - release-*
-    - master
-    event:
-    - push
-
-- name: docker-key-gen-merge
-  commands:
-  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
-  - "make docker-build/key-generator"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock	
-    path: "/var/run/docker.sock"
-  when:
-    branch:
-    - dev
-    - release-*
-    - master
-    event:
-    - push
-
-- name: docker-explorer-merge
-  commands:
-  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
-  - "make docker-build/explorer"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock	
-    path: "/var/run/docker.sock"
-  when:
-    branch:
-    - dev
-    - release-*
-    - master
-    event:
-    - push
-
-- name: docker-grpcwebproxy-merge
-  commands:
-  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
-  - "make docker-build/grpcwebproxy"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock	
-    path: "/var/run/docker.sock"
-  when:
-    branch:
-    - dev
-    - release-*
-    - master
-    event:
-    - push
-
 - name: package-sbt-artifacts-merge
   commands:
   - "make clean"
@@ -388,6 +307,102 @@ steps:
     event:
     - push
 
+- name: rust-compile-for-make
+  environment:
+    CARGO_FLAGS: "--locked"
+  commands:
+  - "cd execution-engine"
+  - "make build"
+  image: "casperlabs/buildenv:latest"
+  when:
+    branch:
+    - dev
+    - release-*
+    - master
+    event:
+    - push
+  depends_on:
+  - package-sbt-artifacts-merge
+  - package-ee
+
+- name: docker-build-ee-merge
+  commands:
+  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
+  - "make docker-build/execution-engine"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock	
+    path: "/var/run/docker.sock"
+  when:
+    branch:
+    - dev
+    - release-*
+    - master
+    event:
+    - push
+  depends_on:
+  - package-sbt-artifacts-merge
+  - package-ee
+
+- name: docker-key-gen-merge
+  commands:
+  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
+  - "make docker-build/key-generator"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock	
+    path: "/var/run/docker.sock"
+  when:
+    branch:
+    - dev
+    - release-*
+    - master
+    event:
+    - push
+  depends_on:
+  - package-sbt-artifacts-merge
+  - package-ee
+
+- name: docker-explorer-merge
+  commands:
+  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
+  - "make docker-build/explorer"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock	
+    path: "/var/run/docker.sock"
+  when:
+    branch:
+    - dev
+    - release-*
+    - master
+    event:
+    - push
+  depends_on:
+  - package-sbt-artifacts-merge
+  - package-ee
+
+- name: docker-grpcwebproxy-merge
+  commands:
+  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
+  - "make docker-build/grpcwebproxy"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock	
+    path: "/var/run/docker.sock"
+  when:
+    branch:
+    - dev
+    - release-*
+    - master
+    event:
+    - push
+  depends_on:
+  - package-sbt-artifacts-merge
+  - package-ee
+
 - name: rsync-artifacts
   image: drillster/drone-rsync
   settings:
@@ -413,6 +428,9 @@ steps:
     - master
     event:
     - push
+  depends_on:
+  - package-sbt-artifacts-merge
+  - package-ee
 
 - name: docker-publish
   commands:
@@ -466,6 +484,11 @@ steps:
     - master
     event:
     - push
+  depends_on:
+  - docker-build-ee-merge
+  - docker-key-gen-merge
+  - docker-explorer-merge
+  - docker-grpcwebproxy-merge
 
 - name: contract-examples
   image: plugins/downstream
@@ -485,6 +508,16 @@ steps:
     - master
     event:
     - push
+  depends_on:
+  - rust-compile-for-make
+  - docker-build-ee-merge
+  - docker-key-gen-merge
+  - docker-explorer-merge
+  - docker-grpcwebproxy-merge
+  - package-sbt-artifacts-merge
+  - package-ee
+  - rsync-artifacts
+  - docker-publish
 
 - name: cleanup
   commands:
