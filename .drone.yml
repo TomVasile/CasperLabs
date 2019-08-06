@@ -486,7 +486,7 @@ steps:
   - package-sbt-artifacts-merge
   - package-ee
   - rsync-artifacts
-  - docker-publish
+#  - docker-publish
 
 - name: cleanup
   commands:
