@@ -38,6 +38,13 @@ final case class Options(arguments: Seq[String]) extends ScallopConf(arguments) 
       required = true
     )
 
+  val nodeId =
+    opt[String](
+      descr =
+        "Node ID (i.e. the Keccak256 hash of the public key the node uses for TLS) in case secure communication is needed.",
+      required = false
+    )
+
   val hexCheck: String => Boolean = _.matches("[0-9a-fA-F]+")
   val fileCheck: File => Boolean = file =>
     file.exists() && file.canRead && !file.isDirectory && file.isFile
@@ -50,8 +57,9 @@ final case class Options(arguments: Seq[String]) extends ScallopConf(arguments) 
     )
 
     val from = opt[String](
-      descr = "Purse address that will be used to pay for the deployment.",
-      default = Option("00")
+      descr =
+        "The public key of the account which is the context of this deployment, base16 encoded.",
+      required = false
     )
 
     val gasLimit =
@@ -65,19 +73,25 @@ final case class Options(arguments: Seq[String]) extends ScallopConf(arguments) 
     val gasPrice = opt[Long](
       descr = "The price of gas for this transaction in units dust/gas. Must be positive integer.",
       validate = _ > 0,
-      required = true
+      required = false,
+      default = 10L.some
     )
 
     val nonce = opt[Long](
       descr = "This allows you to overwrite your own pending transactions that use the same nonce.",
-      default = Option(0L)
+      validate = _ > 0,
+      required = true
     )
 
     val session =
       opt[File](required = true, descr = "Path to the file with session code", validate = fileCheck)
 
     val payment =
-      opt[File](required = true, descr = "Path to the file with payment code", validate = fileCheck)
+      opt[File](
+        required = false,
+        descr = "Path to the file with payment code, by default fallbacks to the --session code",
+        validate = fileCheck
+      )
 
     val publicKey =
       opt[File](
@@ -111,10 +125,38 @@ final case class Options(arguments: Seq[String]) extends ScallopConf(arguments) 
       trailArg[String](
         name = "hash",
         required = true,
-        descr = "Value of the block hash, full, base16 encoded."
+        descr = "Value of the block hash, base16 encoded."
       )
   }
   addSubcommand(showBlock)
+
+  val showDeploys = new Subcommand("show-deploys") {
+    descr(
+      "View deploys included in a block."
+    )
+
+    val hash =
+      trailArg[String](
+        name = "hash",
+        required = true,
+        descr = "Value of the block hash, base16 encoded."
+      )
+  }
+  addSubcommand(showDeploys)
+
+  val showDeploy = new Subcommand("show-deploy") {
+    descr(
+      "View properties of a deploy known by Casper on an existing running node."
+    )
+
+    val hash =
+      trailArg[String](
+        name = "hash",
+        required = true,
+        descr = "Value of the deploy hash, base16 encoded."
+      )
+  }
+  addSubcommand(showDeploy)
 
   val showBlocks = new Subcommand("show-blocks") {
     descr(
@@ -130,6 +172,109 @@ final case class Options(arguments: Seq[String]) extends ScallopConf(arguments) 
 
   }
   addSubcommand(showBlocks)
+
+  val unbond = new Subcommand("unbond") {
+    descr("Issues unbonding request")
+
+    val amount = opt[Long](
+      name = "amount",
+      validate = _ > 0,
+      descr =
+        "Amount of tokens to unbond. If not provided then a request to unbond with all staked tokens is made."
+    )
+
+    val session =
+      opt[File](
+        descr = "Path to the file with unbonding contract.",
+        validate = fileCheck
+      )
+
+    val nonce = opt[Long](
+      descr =
+        "Nonce of the account. Sequences deploys from that account. Every new deploy has to use nonce one higher than current account's nonce.",
+      validate = _ > 0,
+      required = true
+    )
+
+    val privateKey =
+      opt[File](
+        descr = "Path to the file with account private key (Ed25519)",
+        validate = fileCheck,
+        required = true
+      )
+
+  }
+  addSubcommand(unbond)
+
+  val bond = new Subcommand("bond") {
+    descr("Issues bonding request")
+
+    val amount = opt[Long](
+      name = "amount",
+      validate = _ > 0,
+      descr = "amount of tokens to bond",
+      required = true
+    )
+
+    val session =
+      opt[File](
+        descr = "Path to the file with bonding contract.",
+        validate = fileCheck
+      )
+
+    val nonce = opt[Long](
+      descr =
+        "Nonce of the account. Sequences deploys from that account. Every new deploy has to use nonce one higher than current account's nonce.",
+      validate = _ > 0,
+      required = true
+    )
+
+    val privateKey =
+      opt[File](
+        descr = "Path to the file with account private key (Ed25519)",
+        validate = fileCheck,
+        required = true
+      )
+  }
+  addSubcommand(bond)
+
+  val transfer = new Subcommand("transfer") {
+    descr("Transfers funds between accounts")
+
+    val amount = opt[Long](
+      name = "amount",
+      validate = _ > 0,
+      descr = "amount of tokens to transfer",
+      required = true
+    )
+
+    val session =
+      opt[File](
+        descr = "Path to the file with transfer contract.",
+        validate = fileCheck
+      )
+
+    val nonce = opt[Long](
+      descr =
+        "Nonce of the account. Sequences deploys from that account. Every new deploy has to use nonce one higher than current account's nonce.",
+      validate = _ > 0,
+      required = true
+    )
+
+    val privateKey =
+      opt[File](
+        descr = "Path to the file with (from) account private key (Ed25519)",
+        validate = fileCheck,
+        required = true
+      )
+
+    val targetAccount =
+      opt[String](
+        descr = "base64 representation of target account's public key",
+        required = true
+      )
+  }
+  addSubcommand(transfer)
 
   val visualizeBlocks = new Subcommand("vdag") {
     descr(
@@ -178,8 +323,9 @@ final case class Options(arguments: Seq[String]) extends ScallopConf(arguments) 
     val keyType =
       opt[String](
         name = "type",
-        descr = "Type of base key. Must be one of 'hash', 'uref', 'address'",
-        validate = s => Set("hash", "uref", "address").contains(s.toLowerCase),
+        descr =
+          "Type of base key. Must be one of 'hash', 'uref', 'address' or 'local'. For 'local' key type, 'key' value format is {seed}:{rest}, where both parts are hex encoded.",
+        validate = s => Set("hash", "uref", "address", "local").contains(s.toLowerCase),
         default = Option("address")
       )
 
@@ -198,6 +344,27 @@ final case class Options(arguments: Seq[String]) extends ScallopConf(arguments) 
       )
   }
   addSubcommand(query)
+
+  val balance = new Subcommand("balance") {
+    descr("Returns the balance of the account at the specified block.")
+
+    val blockHash =
+      opt[String](
+        name = "block-hash",
+        descr = "Hash of the block to query the state of",
+        required = true,
+        validate = hexCheck
+      )
+
+    val address =
+      opt[String](
+        name = "address",
+        descr = "Account's public key in hex.",
+        required = true,
+        validate = hexCheck
+      )
+  }
+  addSubcommand(balance)
 
   verify()
 }

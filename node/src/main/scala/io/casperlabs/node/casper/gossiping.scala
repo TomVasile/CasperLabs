@@ -4,65 +4,58 @@ import cats._
 import cats.effect._
 import cats.effect.concurrent._
 import cats.implicits._
-import cats.data.OptionT
 import cats.temp.par.Par
 import com.google.protobuf.ByteString
-import eu.timepit.refined._
-import eu.timepit.refined.auto._
-import eu.timepit.refined.numeric._
-import io.casperlabs.shared.{Cell, Log, Resources, Time}
 import io.casperlabs.blockstorage.{BlockDagStorage, BlockStore}
-import io.casperlabs.casper._
 import io.casperlabs.casper.MultiParentCasperRef.MultiParentCasperRef
 import io.casperlabs.casper.consensus._
-import io.casperlabs.casper.LegacyConversions
 import io.casperlabs.casper.genesis.Genesis
 import io.casperlabs.casper.util.ProtoUtil
 import io.casperlabs.casper.util.comm.BlockApproverProtocol
+import io.casperlabs.casper.{LegacyConversions, _}
 import io.casperlabs.catscontrib.MonadThrowable
-import io.casperlabs.comm.{CachedConnections, NodeAsk}
 import io.casperlabs.comm.ServiceError.{InvalidArgument, NotFound, Unavailable}
-import io.casperlabs.comm.discovery.{Node, NodeDiscovery}
 import io.casperlabs.comm.discovery.NodeUtils._
+import io.casperlabs.comm.discovery.{Node, NodeDiscovery}
 import io.casperlabs.comm.gossiping._
-import io.casperlabs.comm.grpc.{
-  AuthInterceptor,
-  ErrorInterceptor,
-  GrpcServer,
-  MetricsInterceptor,
-  SslContexts
-}
-import io.casperlabs.crypto.codec.Base16
+import io.casperlabs.comm.grpc._
+import io.casperlabs.comm.{CachedConnections, NodeAsk}
 import io.casperlabs.crypto.Keys.PublicKey
+import io.casperlabs.crypto.codec.Base16
 import io.casperlabs.metrics.Metrics
 import io.casperlabs.node.configuration.Configuration
-import io.casperlabs.node.diagnostics
+import io.casperlabs.shared.{Cell, FilesAPI, Log, Resources, Time}
 import io.casperlabs.smartcontracts.ExecutionEngineService
 import io.grpc.ManagedChannel
-import io.netty.handler.ssl.{ClientAuth, SslContext}
 import io.grpc.netty.{NegotiationType, NettyChannelBuilder}
-import monix.execution.Scheduler
+import java.util.concurrent.{TimeUnit, TimeoutException}
+
+import io.casperlabs.casper.validation.Validation
+import io.netty.handler.ssl.{ClientAuth, SslContext}
 import monix.eval.TaskLike
-import scala.io.Source
+import monix.execution.Scheduler
+
 import scala.concurrent.duration._
-import scala.util.control.NoStackTrace
+import scala.io.Source
 import scala.util.Random
+import scala.util.control.NoStackTrace
 
 /** Create the Casper stack using the GossipService. */
 package object gossiping {
   private implicit val metricsSource: Metrics.Source =
     Metrics.Source(Metrics.Source(Metrics.BaseSource, "node"), "gossiping")
 
-  def apply[F[_]: Par: ConcurrentEffect: Log: Metrics: Time: Timer: SafetyOracle: BlockStore: BlockDagStorage: NodeDiscovery: NodeAsk: MultiParentCasperRef: ExecutionEngineService](
+  def apply[F[_]: Par: ConcurrentEffect: Log: Metrics: Time: Timer: FinalityDetector: BlockStore: BlockDagStorage: NodeDiscovery: NodeAsk: MultiParentCasperRef: ExecutionEngineService: LastFinalizedBlockHashContainer: FilesAPI: Validation](
       port: Int,
       conf: Configuration,
       grpcScheduler: Scheduler
   )(implicit scheduler: Scheduler, logId: Log[Id], metricsId: Metrics[Id]): Resource[F, Unit] = {
 
-    val cert = Resources.withResource(Source.fromFile(conf.tls.certificate.toFile))(_.mkString)
-    val key  = Resources.withResource(Source.fromFile(conf.tls.key.toFile))(_.mkString)
+    val (cert, key) = conf.tls.readCertAndKey
 
+    // SSL context to use when connecting to another node.
     val clientSslContext = SslContexts.forClient(cert, key)
+    // SSL context to use when another node connects to us.
     val serverSslContext = SslContexts.forServer(cert, key, ClientAuth.REQUIRE)
 
     // For client stub to GossipService conversions.
@@ -70,7 +63,7 @@ package object gossiping {
 
     for {
       cachedConnections <- makeConnectionsCache(
-                            conf.server.maxMessageSize,
+                            conf,
                             clientSslContext,
                             grpcScheduler
                           )
@@ -79,59 +72,87 @@ package object gossiping {
         cachedConnections.connection(node, enforce = true) map { chan =>
           new GossipingGrpcMonix.GossipServiceStub(chan)
         } map {
-          GrpcGossipService.toGossipService(_, onError = {
-            case Unavailable(_) => disconnect(cachedConnections, node)
-          })
+          GrpcGossipService.toGossipService(
+            _,
+            onError = {
+              case Unavailable(_)      => disconnect(cachedConnections, node)
+              case _: TimeoutException => disconnect(cachedConnections, node)
+            },
+            timeout = conf.server.defaultTimeout
+          )
         }
       }
 
       relaying <- makeRelaying(conf, connectToGossip)
 
-      downloadManager <- makeDownloadManager(conf, connectToGossip, relaying)
+      validatorId <- Resource.liftF(ValidatorIdentity.fromConfig[F](conf.casper))
+
+      downloadManager <- makeDownloadManager(conf, connectToGossip, relaying, validatorId)
 
       genesisApprover <- makeGenesisApprover(conf, connectToGossip, downloadManager)
 
       // Make sure MultiParentCasperRef is set before the synchronizer is resumed.
-      awaitApproval = genesisApprover.awaitApproval >>= { genesisBlockHash =>
-        for {
-          maybeGenesis <- BlockStore[F].get(genesisBlockHash)
-          genesisStore <- MonadThrowable[F].fromOption(
-                           maybeGenesis,
-                           NotFound(s"Cannot retrieve Genesis ${show(genesisBlockHash)}")
-                         )
-          validatorId <- ValidatorIdentity.fromConfig[F](conf.casper)
-          genesis     = genesisStore.getBlockMessage
-          prestate    = ProtoUtil.preStateHash(genesis)
-          transforms  = genesisStore.transformEntry
-          casper <- MultiParentCasper.fromGossipServices(
-                     validatorId,
-                     genesis,
-                     prestate,
-                     transforms,
-                     conf.casper.shardId,
-                     relaying
-                   )
-          _ <- MultiParentCasperRef[F].set(casper)
-          _ <- Log[F].info("Making the transition to block processing.")
-        } yield ()
-      }
+      awaitApproval <- makeFiberResource {
+                        genesisApprover.awaitApproval >>= { genesisBlockHash =>
+                          for {
+                            maybeGenesis <- BlockStore[F].get(genesisBlockHash)
+                            genesisStore <- MonadThrowable[F].fromOption(
+                                             maybeGenesis,
+                                             NotFound(
+                                               s"Cannot retrieve Genesis ${show(genesisBlockHash)}"
+                                             )
+                                           )
+                            validatorId <- ValidatorIdentity.fromConfig[F](conf.casper)
+                            genesis     = genesisStore.getBlockMessage
+                            prestate    = ProtoUtil.preStateHash(genesis)
+                            transforms  = genesisStore.transformEntry
+                            casper <- MultiParentCasper.fromGossipServices(
+                                       validatorId,
+                                       genesis,
+                                       prestate,
+                                       transforms,
+                                       conf.casper.chainId,
+                                       relaying
+                                     )
+                            _ <- MultiParentCasperRef[F].set(casper)
+                            _ <- Log[F].info("Making the transition to block processing.")
+                          } yield ()
+                        }
+                      }
 
-      // The StashingSynchronizer will start a fiber to await on the above.
-      isInitialRef <- Resource.liftF(Ref.of[F, Boolean](true))
-      synchronizer <- makeSynchronizer(conf, connectToGossip, awaitApproval, isInitialRef)
+      isInitialRef <- Resource.liftF(
+                       Ref.of[F, Boolean](conf.server.bootstrap.nonEmpty && !conf.casper.standalone)
+                     )
+      synchronizer <- makeSynchronizer(conf, connectToGossip, awaitApproval.join, isInitialRef)
 
       gossipServiceServer <- makeGossipServiceServer(
-                              port,
                               conf,
                               synchronizer,
                               downloadManager,
-                              genesisApprover,
-                              serverSslContext,
-                              grpcScheduler
+                              genesisApprover
                             )
 
-      // Start syncing with the bootstrap in the background.
-      _ <- makeInitialSynchronization(conf, gossipServiceServer, connectToGossip, isInitialRef)
+      _ <- startGrpcServer(
+            gossipServiceServer,
+            serverSslContext,
+            conf,
+            port,
+            grpcScheduler
+          )
+
+      // Start syncing with the bootstrap and/or some others in the background.
+      _ <- Resource
+            .liftF(isInitialRef.get)
+            .ifM(
+              makeInitialSynchronization(
+                conf,
+                gossipServiceServer,
+                connectToGossip,
+                awaitApproval.join,
+                isInitialRef
+              ),
+              Resource.liftF(().pure[F])
+            )
 
       // Start a loop to periodically print peer count, new and disconnected peers, based on NodeDiscovery.
       _ <- makePeerCountPrinter
@@ -147,8 +168,8 @@ package object gossiping {
     } yield cont
 
   /** Validate the genesis candidate or any new block via Casper. */
-  private def validateAndAddBlock[F[_]: Concurrent: Time: Log: BlockStore: BlockDagStorage: ExecutionEngineService: MultiParentCasperRef](
-      shardId: String,
+  private def validateAndAddBlock[F[_]: Concurrent: Time: Log: BlockStore: BlockDagStorage: ExecutionEngineService: MultiParentCasperRef: Metrics: Validation](
+      chainId: String,
       block: Block
   ): F[Unit] =
     MultiParentCasperRef[F].get
@@ -160,10 +181,9 @@ package object gossiping {
           for {
             _           <- Log[F].info(s"Validating genesis-like block ${show(block.blockHash)}...")
             state       <- Cell.mvarCell[F, CasperState](CasperState())
-            executor    = new MultiParentCasperImpl.StatelessExecutor(shardId)
+            executor    <- MultiParentCasperImpl.StatelessExecutor.create[F](chainId)
             dag         <- BlockDagStorage[F].getRepresentation
-            result      <- executor.validateAndAddBlock(None, dag, block)(state)
-            (status, _) = result
+            (status, _) <- executor.validateAndAddBlock(None, dag, block)(state)
           } yield status
 
         case None =>
@@ -194,7 +214,7 @@ package object gossiping {
 
   /** Cached connection resources, closed at the end. */
   private def makeConnectionsCache[F[_]: Concurrent: Log: Metrics](
-      maxMessageSize: Int,
+      conf: Configuration,
       clientSslContext: SslContext,
       grpcScheduler: Scheduler
   ): Resource[F, CachedConnections[F, Unit]] = Resource {
@@ -203,7 +223,7 @@ package object gossiping {
       cache = makeCache {
         makeGossipChannel(
           _,
-          maxMessageSize,
+          conf,
           clientSslContext,
           grpcScheduler
         )
@@ -221,7 +241,7 @@ package object gossiping {
   /** Open a gRPC channel for gossiping. */
   private def makeGossipChannel[F[_]: Sync: Log](
       peer: Node,
-      maxMessageSize: Int,
+      conf: Configuration,
       clientSslContext: SslContext,
       grpcScheduler: Scheduler
   ): F[ManagedChannel] =
@@ -231,10 +251,13 @@ package object gossiping {
                NettyChannelBuilder
                  .forAddress(peer.host, peer.protocolPort)
                  .executor(grpcScheduler)
-                 .maxInboundMessageSize(maxMessageSize)
+                 .maxInboundMessageSize(conf.server.maxMessageSize)
                  .negotiationType(NegotiationType.TLS)
                  .sslContext(clientSslContext)
                  .overrideAuthority(Base16.encode(peer.id.toByteArray))
+                 // https://github.com/grpc/grpc-java/issues/3470 indicates that the timeout will raise Unavailable when a connection is attempted.
+                 .keepAliveTimeout(conf.server.defaultTimeout.toMillis, TimeUnit.MILLISECONDS)
+                 .idleTimeout(60, TimeUnit.SECONDS) // This just puts the channel in a low resource state.
                  .build()
              }
     } yield chan
@@ -250,7 +273,7 @@ package object gossiping {
       } yield s.copy(connections = s.connections - peer)
     }
 
-  private def makeRelaying[F[_]: Sync: Par: Log: Metrics: NodeDiscovery: NodeAsk](
+  def makeRelaying[F[_]: Sync: Par: Log: Metrics: NodeDiscovery: NodeAsk](
       conf: Configuration,
       connectToGossip: GossipService.Connector[F]
   ): Resource[F, Relaying[F]] =
@@ -264,14 +287,14 @@ package object gossiping {
         )
       }
 
-  private def makeDownloadManager[F[_]: Concurrent: Log: Time: Timer: Metrics: BlockStore: BlockDagStorage: ExecutionEngineService: MultiParentCasperRef](
+  def makeDownloadManager[F[_]: Concurrent: Log: Time: Timer: Metrics: BlockStore: BlockDagStorage: ExecutionEngineService: MultiParentCasperRef: Validation](
       conf: Configuration,
       connectToGossip: GossipService.Connector[F],
-      relaying: Relaying[F]
+      relaying: Relaying[F],
+      validatorId: Option[ValidatorIdentity]
   ): Resource[F, DownloadManager[F]] =
     for {
-      _           <- Resource.liftF(DownloadManagerImpl.establishMetrics[F])
-      validatorId <- Resource.liftF(ValidatorIdentity.fromConfig[F](conf.casper))
+      _ <- Resource.liftF(DownloadManagerImpl.establishMetrics[F])
       maybeValidatorPublicKey = validatorId
         .map(x => ByteString.copyFrom(x.publicKey))
         .filterNot(_.isEmpty)
@@ -291,7 +314,7 @@ package object gossiping {
                                       s"Block ${PrettyPrinter.buildString(block)} seems to be created by a doppelganger using the same validator key!"
                                     )
                                 } *>
-                                validateAndAddBlock(conf.casper.shardId, block)
+                                validateAndAddBlock(conf.casper.chainId, block)
 
                             override def storeBlock(block: Block): F[Unit] =
                               // Validation has already stored it.
@@ -312,7 +335,7 @@ package object gossiping {
                         )
     } yield downloadManager
 
-  private def makeGenesisApprover[F[_]: Concurrent: Log: Time: Timer: NodeDiscovery: BlockStore: BlockDagStorage: MultiParentCasperRef: ExecutionEngineService](
+  private def makeGenesisApprover[F[_]: Concurrent: Log: Time: Timer: NodeDiscovery: BlockStore: BlockDagStorage: MultiParentCasperRef: ExecutionEngineService: FilesAPI: Metrics: Validation](
       conf: Configuration,
       connectToGossip: GossipService.Connector[F],
       downloadManager: DownloadManager[F]
@@ -352,13 +375,8 @@ package object gossiping {
       // Function to read and set the bonds.txt in modes which generate the Genesis locally.
       readBondsFile = {
         for {
-          _ <- Log[F].info("Taking bonds from file.")
-          bonds <- Genesis.getBonds[F](
-                    conf.casper.genesisPath,
-                    conf.casper.bondsFile,
-                    conf.casper.numValidators
-                  )
-          _ <- ExecutionEngineService[F].setBonds(bonds)
+          _     <- Log[F].info("Taking bonds from file.")
+          bonds <- Genesis.getBonds[F](conf.casper.bondsFile)
         } yield bonds
       }
 
@@ -367,9 +385,7 @@ package object gossiping {
                                // This is the case of a validator that will pull the genesis from the bootstrap, validate and approve it.
                                // Based on `CasperPacketHandler.of`.
                                for {
-                                 _ <- Log[F].info("Starting in approve genesis mode")
-                                 timestamp <- conf.casper.deployTimestamp
-                                               .fold(Time[F].currentMillis)(_.pure[F])
+                                 _       <- Log[F].info("Starting in approve genesis mode")
                                  wallets <- Genesis.getWallets[F](conf.casper.walletsFile)
                                  bonds   <- readBondsFile
                                  bondsMap = bonds.map {
@@ -382,15 +398,11 @@ package object gossiping {
                                      .withBlock(LegacyConversions.fromBlock(block))
                                      .withRequiredSigs(conf.casper.requiredSigs)
 
-                                   BlockApproverProtocol.validateCandidate(
+                                   BlockApproverProtocol.validateCandidate[F](
                                      candidate,
-                                     conf.casper.requiredSigs,
-                                     timestamp,
                                      wallets,
                                      bondsMap,
-                                     conf.casper.minimumBond,
-                                     conf.casper.maximumBond,
-                                     conf.casper.hasFaucet
+                                     BlockApproverProtocol.GenesisConf.fromCasperConf(conf.casper)
                                    ) map {
                                      case Left(msg) =>
                                        Left(InvalidArgument(msg))
@@ -406,17 +418,8 @@ package object gossiping {
                                  ((_: Block) => none[Approval].asRight[Throwable].pure[F]).pure[F]
                              } else {
                                // Non-validating nodes. They are okay with everything,
-                               // only checking that the required signatures are present.
-                               // In order to not have to circulate the bonds.txt they set it here.
-                               Log[F].info("Starting in default mode") *> { (genesis: Block) =>
-                                 for {
-                                   _ <- Log[F].info("Taking bonds from the Genesis candidate.")
-                                   bonds = genesis.getHeader.getState.bonds.map { bond =>
-                                     PublicKey(bond.validatorPublicKey.toByteArray) -> bond.stake
-                                   }.toMap
-                                   _ <- ExecutionEngineService[F].setBonds(bonds)
-                                 } yield none[Approval].asRight[Throwable]
-                               }.pure[F]
+                               Log[F].info("Starting in default mode") *>
+                                 ((_: Block) => none[Approval].asRight[Throwable].pure[F]).pure[F]
                              }
                            }
 
@@ -438,7 +441,7 @@ package object gossiping {
             publicKey: ByteString,
             signature: Signature
         ): Boolean =
-          Validate.signature(
+          Validation[F].signature(
             blockHash.toByteArray,
             protocol
               .Signature()
@@ -457,21 +460,13 @@ package object gossiping {
                    for {
                      genesis <- Resource.liftF {
                                  for {
-                                   bonds <- readBondsFile
-                                   _     <- Log[F].info("Constructing Genesis candidate...")
-                                   genesis <- Genesis[F](
-                                               conf.casper.walletsFile,
-                                               conf.casper.minimumBond,
-                                               conf.casper.maximumBond,
-                                               conf.casper.hasFaucet,
-                                               conf.casper.shardId,
-                                               conf.casper.deployTimestamp
-                                             ).map(_.getBlockMessage)
+                                   _       <- Log[F].info("Constructing Genesis candidate...")
+                                   genesis <- Genesis[F](conf.casper).map(_.getBlockMessage)
                                    // Store it so others can pull it from the bootstrap node.
                                    _ <- Log[F].info(
-                                         s"Trying to store generated Genesis candidate ${genesis.blockHash}..."
+                                         s"Trying to store generated Genesis candidate ${show(genesis.blockHash)}"
                                        )
-                                   _ <- validateAndAddBlock(conf.casper.shardId, genesis)
+                                   _ <- validateAndAddBlock(conf.casper.chainId, genesis)
                                  } yield genesis
                                }
 
@@ -500,7 +495,7 @@ package object gossiping {
                  }
     } yield approver
 
-  private def makeSynchronizer[F[_]: Concurrent: Par: Log: Metrics: MultiParentCasperRef: BlockDagStorage](
+  def makeSynchronizer[F[_]: Concurrent: Par: Log: Metrics: MultiParentCasperRef: BlockDagStorage: Validation](
       conf: Configuration,
       connectToGossip: GossipService.Connector[F],
       awaitApproved: F[Unit],
@@ -508,58 +503,49 @@ package object gossiping {
   ): Resource[F, Synchronizer[F]] = Resource.liftF {
     for {
       _ <- SynchronizerImpl.establishMetrics[F]
-      underlying <- Sync[F].delay {
-                     new SynchronizerImpl[F](
-                       connectToGossip,
-                       new SynchronizerImpl.Backend[F] {
-                         override def tips: F[List[ByteString]] =
-                           for {
-                             casper    <- unsafeGetCasper[F]
-                             dag       <- casper.blockDag
-                             tipHashes <- casper.estimator(dag)
-                           } yield tipHashes.toList
+      underlying <- SynchronizerImpl[F](
+                     connectToGossip,
+                     new SynchronizerImpl.Backend[F] {
+                       override def tips: F[List[ByteString]] =
+                         for {
+                           casper    <- unsafeGetCasper[F]
+                           dag       <- casper.blockDag
+                           tipHashes <- casper.estimator(dag)
+                         } yield tipHashes.toList
 
-                         override def justifications: F[List[ByteString]] =
-                           for {
-                             casper <- unsafeGetCasper[F]
-                             dag    <- casper.blockDag
-                             latest <- dag.latestMessageHashes
-                           } yield latest.values.toList
+                       override def justifications: F[List[ByteString]] =
+                         for {
+                           casper <- unsafeGetCasper[F]
+                           dag    <- casper.blockDag
+                           latest <- dag.latestMessageHashes
+                         } yield latest.values.toList
 
-                         override def validate(blockSummary: BlockSummary): F[Unit] =
-                           // TODO: Presently the Validation only works on full blocks.
-                           // Logging so we get an idea of how many summaries we are pulling.
-                           Log[F].debug(
-                             s"Trying to validate block summary ${show(blockSummary.blockHash)}"
-                           )
+                       override def validate(blockSummary: BlockSummary): F[Unit] =
+                         Validation[F].blockSummary(blockSummary, conf.casper.chainId)
 
-                         override def notInDag(blockHash: ByteString): F[Boolean] =
-                           isInDag(blockHash).map(!_)
-                       },
-                       maxPossibleDepth = conf.server.syncMaxPossibleDepth,
-                       minBlockCountToCheckBranchingFactor =
-                         conf.server.syncMinBlockCountToCheckBranchingFactor,
-                       // Really what we should be looking at is the width at any rank being less than the number of validators.
-                       maxBranchingFactor = conf.server.syncMaxBranchingFactor,
-                       maxDepthAncestorsRequest = conf.server.syncMaxDepthAncestorsRequest,
-                       maxInitialBlockCount = conf.server.initSyncMaxBlockCount,
-                       isInitialRef = isInitialRef
-                     )
-                   }
+                       override def notInDag(blockHash: ByteString): F[Boolean] =
+                         isInDag(blockHash).map(!_)
+                     },
+                     maxPossibleDepth = conf.server.syncMaxPossibleDepth,
+                     minBlockCountToCheckBranchingFactor =
+                       conf.server.syncMinBlockCountToCheckBranchingFactor,
+                     // Really what we should be looking at is the width at any rank being less than the number of validators.
+                     maxBranchingFactor = conf.server.syncMaxBranchingFactor,
+                     maxDepthAncestorsRequest = conf.server.syncMaxDepthAncestorsRequest,
+                     maxInitialBlockCount = conf.server.initSyncMaxBlockCount,
+                     isInitialRef = isInitialRef
+                   )
       stashing <- StashingSynchronizer.wrap(underlying, awaitApproved)
     } yield stashing
   }
 
-  /** Create and start the gossip service. */
-  private def makeGossipServiceServer[F[_]: Concurrent: Par: TaskLike: ObservableIterant: Log: Metrics: BlockStore: BlockDagStorage: MultiParentCasperRef](
-      port: Int,
+  /** Create gossip service. */
+  def makeGossipServiceServer[F[_]: Concurrent: Par: Log: Metrics: BlockStore: BlockDagStorage: MultiParentCasperRef](
       conf: Configuration,
       synchronizer: Synchronizer[F],
       downloadManager: DownloadManager[F],
-      genesisApprover: GenesisApprover[F],
-      serverSslContext: SslContext,
-      grpcScheduler: Scheduler
-  )(implicit logId: Log[Id], metricsId: Metrics[Id]): Resource[F, GossipServiceServer[F]] =
+      genesisApprover: GenesisApprover[F]
+  ): Resource[F, GossipServiceServer[F]] =
     for {
       backend <- Resource.pure[F, GossipServiceServer.Backend[F]] {
                   new GossipServiceServer.Backend[F] {
@@ -596,8 +582,9 @@ package object gossiping {
                         } yield ()
 
                       override def onDownloaded(blockHash: ByteString) =
-                        // Calling `addBlock` during validation has already stored the block.
-                        Log[F].debug(s"Download ready for ${show(blockHash)}")
+                        // Calling `addBlock` during validation has already stored the block,
+                        // so we have nothing more to do here with the consensus.
+                        synchronizer.downloaded(blockHash)
 
                       override def listTips =
                         for {
@@ -621,31 +608,6 @@ package object gossiping {
                  )
                }
 
-      // Start the gRPC server.
-      _ <- {
-        implicit val s = grpcScheduler
-        GrpcServer(
-          port,
-          services = List(
-            (scheduler: Scheduler) =>
-              Sync[F].delay {
-                val svc = GrpcGossipService.fromGossipService(
-                  server,
-                  blockChunkConsumerTimeout = conf.server.relayBlockChunkConsumerTimeout
-                )
-                GossipingGrpcMonix.bindService(svc, scheduler)
-              }
-          ),
-          interceptors = List(
-            new AuthInterceptor(),
-            new MetricsInterceptor(),
-            ErrorInterceptor.default
-          ),
-          sslContext = serverSslContext.some,
-          maxMessageSize = conf.server.maxMessageSize.some
-        )
-      }
-
     } yield server
 
   /** Initially sync with the bootstrap node and/or some others. */
@@ -653,6 +615,7 @@ package object gossiping {
       conf: Configuration,
       gossipServiceServer: GossipServiceServer[F],
       connectToGossip: GossipService.Connector[F],
+      awaitApproved: F[Unit],
       isInitialRef: Ref[F, Boolean]
   ): Resource[F, Unit] =
     for {
@@ -668,17 +631,19 @@ package object gossiping {
                         connector = connectToGossip
                       )
                     }
-      _ <- makeFiberResource(initialSync.sync() >> isInitialRef.set(false))
+      _ <- makeFiberResource {
+            awaitApproved >> initialSync.sync() >> isInitialRef.set(false)
+          }
     } yield ()
 
   /** The TransportLayer setup prints the number of peers now and then which integration tests
     * may depend upon. We aren't using the `Connect` functionality so have to do it another way. */
   private def makePeerCountPrinter[F[_]: Concurrent: Time: Log: NodeDiscovery]
-    : Resource[F, Unit] = {
+      : Resource[F, Unit] = {
     def loop(prevPeers: Set[Node]): F[Unit] = {
       // Based on Connecttions.removeConn
       val newPeers = for {
-        peers <- NodeDiscovery[F].alivePeersAscendingDistance.map(_.toSet)
+        peers <- NodeDiscovery[F].recentlyAlivePeersAscendingDistance.map(_.toSet)
         _     <- Log[F].info(s"Peers: ${peers.size}").whenA(peers.size != prevPeers.size)
         _ <- (prevPeers diff peers).toList.traverse { peer =>
               Log[F].info(s"Disconnected from ${peer.show}")
@@ -717,4 +682,35 @@ package object gossiping {
           new java.lang.IllegalStateException("Bootstrap node hasn't been configured.")
         )
     )
+
+  def startGrpcServer[F[_]: Sync: TaskLike: ObservableIterant](
+      server: GossipServiceServer[F],
+      serverSslContext: SslContext,
+      conf: Configuration,
+      port: Int,
+      grpcScheduler: Scheduler
+  )(implicit m: Metrics[Id], l: Log[Id]) = {
+    // Start the gRPC server.
+    implicit val s = grpcScheduler
+    GrpcServer(
+      port,
+      services = List(
+        (scheduler: Scheduler) =>
+          Sync[F].delay {
+            val svc = GrpcGossipService.fromGossipService(
+              server,
+              blockChunkConsumerTimeout = conf.server.relayBlockChunkConsumerTimeout
+            )
+            GossipingGrpcMonix.bindService(svc, scheduler)
+          }
+      ),
+      interceptors = List(
+        new AuthInterceptor(),
+        new MetricsInterceptor(),
+        ErrorInterceptor.default
+      ),
+      sslContext = serverSslContext.some,
+      maxMessageSize = conf.server.maxMessageSize.some
+    )
+  }
 }

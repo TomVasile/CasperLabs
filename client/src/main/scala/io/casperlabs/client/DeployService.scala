@@ -1,6 +1,6 @@
 package io.casperlabs.client
 import io.casperlabs.casper.consensus
-import io.casperlabs.casper.consensus.info
+import io.casperlabs.casper.consensus.state.Value
 import simulacrum.typeclass
 
 import scala.util.Either
@@ -9,6 +9,8 @@ import scala.util.Either
   def deploy(d: consensus.Deploy): F[Either[Throwable, String]]
   def propose(): F[Either[Throwable, String]]
   def showBlock(blockHash: String): F[Either[Throwable, String]]
+  def showDeploys(blockHash: String): F[Either[Throwable, String]]
+  def showDeploy(blockHash: String): F[Either[Throwable, String]]
   def showBlocks(depth: Int): F[Either[Throwable, String]]
   def visualizeDag(depth: Int, showJustificationLines: Boolean): F[Either[Throwable, String]]
   def queryState(
@@ -16,5 +18,5 @@ import scala.util.Either
       keyVariant: String,
       keyValue: String,
       path: String
-  ): F[Either[Throwable, String]]
+  ): F[Either[Throwable, Value]]
 }

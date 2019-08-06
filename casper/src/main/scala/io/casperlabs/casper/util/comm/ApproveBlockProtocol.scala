@@ -9,6 +9,7 @@ import com.google.protobuf.ByteString
 import io.casperlabs.casper.LastApprovedBlock.LastApprovedBlock
 import io.casperlabs.casper.protocol._
 import io.casperlabs.casper._
+import io.casperlabs.casper.validation.Validation
 import io.casperlabs.catscontrib.Catscontrib._
 import io.casperlabs.catscontrib.MonadTrans
 import io.casperlabs.comm.rp.Connect.{ConnectionsCell, RPConfAsk}
@@ -34,7 +35,8 @@ trait ApproveBlockProtocol[F[_]] {
 
 abstract class ApproveBlockProtocolInstances {
   implicit def eitherTApproveBlockProtocol[E, F[_]: Monad: ApproveBlockProtocol[?[_]]]
-    : ApproveBlockProtocol[EitherT[F, E, ?]] = ApproveBlockProtocol.forTrans[F, EitherT[?[_], E, ?]]
+      : ApproveBlockProtocol[EitherT[F, E, ?]] =
+    ApproveBlockProtocol.forTrans[F, EitherT[?[_], E, ?]]
 }
 
 object ApproveBlockProtocol {
@@ -49,7 +51,7 @@ object ApproveBlockProtocol {
   def apply[F[_]](implicit instance: ApproveBlockProtocol[F]): ApproveBlockProtocol[F] = instance
 
   //For usage in tests only
-  def unsafe[F[_]: Sync: ConnectionsCell: TransportLayer: Log: Time: Metrics: RPConfAsk: LastApprovedBlock](
+  def unsafe[F[_]: Sync: ConnectionsCell: TransportLayer: Log: Time: Metrics: RPConfAsk: LastApprovedBlock: Validation](
       block: BlockMessage,
       transforms: Seq[TransformEntry],
       trustedValidators: Set[ByteString],
@@ -70,7 +72,7 @@ object ApproveBlockProtocol {
       sigsF
     )
 
-  def of[F[_]: Sync: ConnectionsCell: TransportLayer: Log: Time: Metrics: RPConfAsk: LastApprovedBlock](
+  def of[F[_]: Sync: ConnectionsCell: TransportLayer: Log: Time: Metrics: RPConfAsk: LastApprovedBlock: Validation](
       block: BlockMessage,
       transforms: Seq[TransformEntry],
       trustedValidators: Set[ByteString],
@@ -81,19 +83,18 @@ object ApproveBlockProtocol {
     for {
       now   <- Time[F].currentMillis
       sigsF <- Ref.of[F, Set[Signature]](Set.empty)
-    } yield
-      new ApproveBlockProtocolImpl[F](
-        block,
-        transforms,
-        requiredSigs,
-        trustedValidators,
-        now,
-        duration,
-        interval,
-        sigsF
-      )
+    } yield new ApproveBlockProtocolImpl[F](
+      block,
+      transforms,
+      requiredSigs,
+      trustedValidators,
+      now,
+      duration,
+      interval,
+      sigsF
+    )
 
-  private class ApproveBlockProtocolImpl[F[_]: Sync: ConnectionsCell: TransportLayer: Log: Time: Metrics: RPConfAsk: LastApprovedBlock](
+  private class ApproveBlockProtocolImpl[F[_]: Sync: ConnectionsCell: TransportLayer: Log: Time: Metrics: RPConfAsk: LastApprovedBlock: Validation](
       val block: BlockMessage,
       val transforms: Seq[TransformEntry],
       val requiredSigs: Int,
@@ -115,8 +116,9 @@ object ApproveBlockProtocol {
 
     def addApproval(a: BlockApproval): F[Unit] = {
       val validSig = for {
-        c   <- a.candidate if c == this.candidate
-        sig <- a.sig if Validate.signature(sigData, sig)
+        _   <- a.candidate.filter(_ == this.candidate)
+        sig <- a.sig
+        if Validation[F].signature(sigData, sig)
       } yield sig
 
       val trustedValidator =

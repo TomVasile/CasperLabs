@@ -7,6 +7,7 @@ import cats.temp.par._
 import eu.timepit.refined.api.Refined
 import eu.timepit.refined.auto._
 import eu.timepit.refined.numeric._
+import io.casperlabs.catscontrib.MonadThrowable
 import io.casperlabs.comm.discovery.{Node, NodeDiscovery}
 import io.casperlabs.comm.discovery.NodeUtils.showNode
 import io.casperlabs.comm.gossiping.InitialSynchronizationImpl.SynchronizationError
@@ -51,13 +52,17 @@ class InitialSynchronizationImpl[F[_]: Concurrent: Par: Log: Timer](
         service <- connector(node)
         _       <- Log[F].debug(s"Syncing with a node: ${node.show}")
         tips    <- service.streamDagTipBlockSummaries(StreamDagTipBlockSummariesRequest()).toListL
-        _ <- selfGossipService.newBlocksSynchronous(
-              NewBlocksRequest(
-                sender = node.some,
-                blockHashes = tips.map(_.blockHash)
-              ),
-              skipRelaying = true
-            )
+        _ <- MonadThrowable[F].rethrow {
+              selfGossipService
+                .newBlocksSynchronous(
+                  NewBlocksRequest(
+                    sender = node.some,
+                    blockHashes = tips.map(_.blockHash)
+                  ),
+                  skipRelaying = true
+                )
+                .map(_.leftWiden[Throwable])
+            }
       } yield ()
 
     def loop(nodes: List[Node], failed: Set[Node]): F[Unit] =
@@ -82,7 +87,7 @@ class InitialSynchronizationImpl[F[_]: Concurrent: Par: Log: Timer](
                   if (memoizeNodes) {
                     (if (skipFailedNodesInNextRounds) successful else nodes).pure[F]
                   } else {
-                    nodeDiscovery.alivePeersAscendingDistance.map { peers =>
+                    nodeDiscovery.recentlyAlivePeersAscendingDistance.map { peers =>
                       val nodes = selectNodes(peers)
                       if (skipFailedNodesInNextRounds) {
                         nodes.filterNot(newFailed)
@@ -101,7 +106,7 @@ class InitialSynchronizationImpl[F[_]: Concurrent: Par: Log: Timer](
             }
       }
 
-    nodeDiscovery.alivePeersAscendingDistance
+    nodeDiscovery.recentlyAlivePeersAscendingDistance
       .flatMap { peers =>
         val nodesToSyncWith = selectNodes(peers)
         loop(nodesToSyncWith, Set.empty)

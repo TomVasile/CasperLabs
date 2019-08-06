@@ -2,13 +2,13 @@ package io.casperlabs.casper.util.comm
 
 import cats.effect.concurrent.Ref
 import com.google.protobuf.ByteString
+import io.casperlabs.casper
 import io.casperlabs.casper.LastApprovedBlock.LastApprovedBlock
 import io.casperlabs.casper.helper.TransportLayerCasperTestNodeFactory
 import io.casperlabs.casper.protocol._
-import io.casperlabs.casper.LegacyConversions
+import io.casperlabs.casper.{HashSetCasperTest, LastApprovedBlock, LegacyConversions}
 import io.casperlabs.casper.util.TestTime
 import io.casperlabs.casper.util.comm.ApproveBlockProtocolTest.TestFixture
-import io.casperlabs.casper.{HashSetCasperTest, LastApprovedBlock}
 import io.casperlabs.catscontrib.TaskContrib._
 import io.casperlabs.comm.discovery.Node
 import io.casperlabs.comm.rp.Connect.Connections
@@ -78,7 +78,7 @@ class ApproveBlockProtocolTest extends FlatSpec with Matchers {
     implicit val logStub     = new LogStub[Task]()
     implicit val metricsTest = new MetricsTestImpl[Task]()
 
-    val (validatorSk, validatorPk) = Ed25519.newKeyPair
+    val (validatorSk, _) = Ed25519.newKeyPair
     val TestFixture(_, abp, candidate, _, sigs) =
       ApproveBlockProtocolTest.createProtocol(10, 100.milliseconds, 1.millisecond, Set(validatorSk))
     val a = ApproveBlockProtocolTest.invalidApproval(candidate)
@@ -102,7 +102,7 @@ class ApproveBlockProtocolTest extends FlatSpec with Matchers {
     implicit val metricsTest = new MetricsTestImpl[Task]()
 
     val sigs = (1 to n).map(_ => Ed25519.newKeyPair)
-    val TestFixture(lab, abp, candidate, startTime, sigsF) =
+    val TestFixture(lab, abp, candidate, startTime, _) =
       ApproveBlockProtocolTest.createProtocol(
         n,
         duration = d,
@@ -178,11 +178,11 @@ class ApproveBlockProtocolTest extends FlatSpec with Matchers {
   }
 
   it should "skip the duration and create and approved block immediately if the required signatures is zero" in {
-    val d: FiniteDuration          = 30.milliseconds
-    val (validatorSk, validatorPk) = Ed25519.newKeyPair
-    implicit val ctx               = TestScheduler()
-    implicit val logStub           = new LogStub[Task]()
-    implicit val metricsTest       = new MetricsTestImpl[Task]()
+    val d: FiniteDuration    = 30.milliseconds
+    val (_, validatorPk)     = Ed25519.newKeyPair
+    implicit val ctx         = TestScheduler()
+    implicit val logStub     = new LogStub[Task]()
+    implicit val metricsTest = new MetricsTestImpl[Task]()
 
     val TestFixture(lab, abp, _, startTime, _) =
       ApproveBlockProtocolTest.createProtocol(
@@ -209,8 +209,8 @@ class ApproveBlockProtocolTest extends FlatSpec with Matchers {
     implicit val logStub     = new LogStub[Task]()
     implicit val metricsTest = new MetricsTestImpl[Task]()
 
-    val (validatorSk, validatorPk) = Ed25519.newKeyPair
-    val (invalidSk, invalidPk)     = Ed25519.newKeyPair
+    val (_, validatorPk)       = Ed25519.newKeyPair
+    val (invalidSk, invalidPk) = Ed25519.newKeyPair
     val TestFixture(_, abp, candidate, _, sigsF) =
       ApproveBlockProtocolTest.createProtocol(10, 100.milliseconds, 1.millisecond, Set(validatorPk))
     val a = ApproveBlockProtocolTest.approval(candidate, invalidSk, invalidPk)
@@ -338,16 +338,16 @@ object ApproveBlockProtocolTest extends TransportLayerCasperTestNodeFactory {
     implicit val ctx             = monix.execution.Scheduler.Implicits.global
     implicit val connectionsCell = Cell.mvarCell[Task, Connections](List(src)).unsafeRunSync
     implicit val lab             = LastApprovedBlock.unsafe[Task](None)
+    implicit val raise           = casper.validation.raiseValidateErrorThroughApplicativeError[Task]
+    import io.casperlabs.casper.DeriveValidation._
 
-    val (sk, pk)                                         = Ed25519.newKeyPair
+    val (_, pk)                                          = Ed25519.newKeyPair
     val bonds                                            = HashSetCasperTest.createBonds(Seq(pk))
     val BlockMsgWithTransform(Some(genesis), transforms) = HashSetCasperTest.createGenesis(bonds)
     val validators                                       = validatorsPk.map(ByteString.copyFrom)
     val candidate                                        = ApprovedBlockCandidate(Some(LegacyConversions.fromBlock(genesis)), requiredSigs)
     val sigs                                             = Ref.unsafe[Task, Set[Signature]](Set.empty)
     val startTime                                        = System.currentTimeMillis()
-
-    val node = standaloneEff(genesis, transforms, sk)
     val protocol = ApproveBlockProtocol
       .unsafe[Task](
         LegacyConversions.fromBlock(genesis),

@@ -1,21 +1,20 @@
 package io.casperlabs.casper
 
-import cats._
-import cats.implicits._
 import cats.effect._
 import cats.effect.concurrent._
-import io.casperlabs.casper.api.BlockAPI
-import io.casperlabs.casper.consensus.Deploy
+import cats.implicits._
+import com.google.protobuf.ByteString
 import io.casperlabs.casper.MultiParentCasperRef.MultiParentCasperRef
-import io.casperlabs.shared.Time
-import io.casperlabs.shared.Log
+import io.casperlabs.casper.api.BlockAPI
 import io.casperlabs.metrics.Metrics
+import io.casperlabs.shared.{Log, Time}
+
 import scala.concurrent.duration._
 import scala.util.control.NonFatal
 
 /** Propose a block automatically whenever a timespan has elapsed or
   * we have more than a certain number of new deploys in the buffer. */
-class AutoProposer[F[_]: Concurrent: Time: Log: Metrics: MultiParentCasperRef](
+class AutoProposer[F[_]: Bracket[?[_], Throwable]: Time: Log: Metrics: MultiParentCasperRef](
     checkInterval: FiniteDuration,
     maxInterval: FiniteDuration,
     maxCount: Int,
@@ -26,38 +25,36 @@ class AutoProposer[F[_]: Concurrent: Time: Log: Metrics: MultiParentCasperRef](
     val maxElapsedMillis = maxInterval.toMillis
 
     def loop(
-        // Deploys we saw at the last auto-proposal.
-        prevDeploys: Set[Deploy],
-        // Time we saw the first new deploy after an auto-proposal.
+        // Deploys we tried to propose last time.
+        prevDeploys: Set[ByteString],
+        // Time we saw the first new deploys after an auto-proposal.
         startMillis: Long
     ): F[Unit] = {
 
       val snapshot = for {
         currentMillis <- Time[F].currentMillis
         casper        <- MultiParentCasperRef[F].get
-        // NOTE: Currently the `remainingDeploys` method is private and quite inefficient
-        // (easily goes back to Genesis), but in theory we could try to detect orphans and
-        // propose again automatically.
-        deploys <- casper.fold(Set.empty[Deploy].pure[F])(_.bufferedDeploys)
-      } yield (currentMillis, currentMillis - startMillis, deploys, deploys diff prevDeploys)
+        deployBuffer  <- casper.fold(DeployBuffer.empty.pure[F])(_.bufferedDeploys)
+        deploys       = deployBuffer.pendingDeploys.keySet
+      } yield (currentMillis, currentMillis - startMillis, deploys)
 
       snapshot flatMap {
         // Reset time when we see a new deploy.
-        case (currentMillis, _, _, newDeploys) if newDeploys.nonEmpty && startMillis == 0 =>
-          Time[F].sleep(checkInterval) *>
-            loop(prevDeploys, currentMillis)
+        case (currentMillis, _, deploys) if deploys.nonEmpty && startMillis == 0 =>
+          Time[F].sleep(checkInterval) *> loop(prevDeploys, currentMillis)
 
-        case (_, elapsedMillis, deploys, newDeploys)
-            if newDeploys.nonEmpty && (elapsedMillis >= maxElapsedMillis || newDeploys.size >= maxCount) =>
+        case (_, elapsedMillis, deploys)
+            if deploys.nonEmpty
+              && deploys != prevDeploys
+              && (elapsedMillis >= maxElapsedMillis || deploys.size >= maxCount) =>
           Log[F].info(
-            s"Proposing block after ${elapsedMillis} ms and ${newDeploys.size} new deploys."
+            s"Proposing block after ${elapsedMillis} ms with ${deploys.size} pending deploys."
           ) *>
             tryPropose() *>
             loop(deploys, 0)
 
         case _ =>
-          Time[F].sleep(checkInterval) *>
-            loop(prevDeploys, startMillis)
+          Time[F].sleep(checkInterval) *> loop(prevDeploys, startMillis)
       }
     }
 

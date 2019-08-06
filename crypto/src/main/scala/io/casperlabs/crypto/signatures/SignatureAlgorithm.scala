@@ -6,6 +6,7 @@ import io.casperlabs.crypto.Keys.{PrivateKey, PublicKey, Signature}
 import io.casperlabs.crypto.codec.Base64
 import org.bouncycastle.openssl.PEMKeyPair
 
+import scala.util.control.NonFatal
 import scala.util.{Random, Try}
 
 /**
@@ -98,7 +99,7 @@ object SignatureAlgorithm {
         * Skips header `-----BEGIN PRIVATE KEY-----` and footer `-----END PRIVATE KEY-----`
         */
       def cleanIfPemFile(s: String) =
-        str.split('\n').filterNot(_.contains("PRIVATE KEY")).mkString("")
+        s.split('\n').filterNot(_.contains("PRIVATE KEY")).mkString("")
 
       def tryParse(a: Array[Byte]): Option[Array[Byte]] = a.length match {
         // Some of ed25519 private keys are a concatenation of both private (on the left) and public (on the right).
@@ -138,7 +139,7 @@ object SignatureAlgorithm {
         * Skips header `-----BEGIN PUBLIC KEY-----` and footer `-----END PUBLIC KEY-----`
         */
       def cleanIfPemFile(s: String) =
-        str.split('\n').filterNot(_.contains("PUBLIC KEY")).mkString("")
+        s.split('\n').filterNot(_.contains("PUBLIC KEY")).mkString("")
 
       def tryParse(a: Array[Byte]): Option[Array[Byte]] = a.length match {
         // Some of ed25519 private keys are a concatenation of both private (on the left) and public (on the right).
@@ -173,7 +174,7 @@ object SignatureAlgorithm {
         val key = new SigningKey(sec)
         Some(PublicKey(key.getVerifyKey.toBytes))
       } catch {
-        case _: Throwable => None
+        case NonFatal(_) => None
       }
 
     /**
@@ -258,8 +259,7 @@ object SignatureAlgorithm {
               }
           }
       } catch {
-        case _: Throwable =>
-          None
+        case NonFatal(_) => None
       }
 
     /**
@@ -294,8 +294,7 @@ object SignatureAlgorithm {
             )
           }
       } catch {
-        case _: Throwable =>
-          None
+        case NonFatal(_) => None
       }
 
     override def newKeyPair: (PrivateKey, PublicKey) = {

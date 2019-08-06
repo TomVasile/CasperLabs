@@ -28,20 +28,24 @@ object ProtoUtil {
   // TODO: Move into BlockDAG and remove corresponding param once that is moved over from simulator
   def isInMainChain[F[_]: Monad](
       dag: BlockDagRepresentation[F],
-      candidateBlockHash: BlockHash,
+      candidateBlockMetadata: BlockMetadata,
       targetBlockHash: BlockHash
   ): F[Boolean] =
-    if (candidateBlockHash == targetBlockHash) {
+    if (candidateBlockMetadata.blockHash == targetBlockHash) {
       true.pure[F]
     } else {
       for {
         targetBlockOpt <- dag.lookup(targetBlockHash)
         result <- targetBlockOpt match {
                    case Some(targetBlockMeta) =>
-                     targetBlockMeta.parents.headOption match {
-                       case Some(mainParentHash) =>
-                         isInMainChain(dag, candidateBlockHash, mainParentHash)
-                       case None => false.pure[F]
+                     if (targetBlockMeta.rank <= candidateBlockMetadata.rank)
+                       false.pure[F]
+                     else {
+                       targetBlockMeta.parents.headOption match {
+                         case Some(mainParentHash) =>
+                           isInMainChain(dag, candidateBlockMetadata, mainParentHash)
+                         case None => false.pure[F]
+                       }
                      }
                    case None => false.pure[F]
                  }
@@ -77,6 +81,20 @@ object ProtoUtil {
     } yield mainChain
   }
 
+  def unsafeGetBlockSummary[F[_]: MonadThrowable: BlockStore](hash: BlockHash): F[BlockSummary] =
+    for {
+      maybeBlock <- BlockStore[F].getBlockSummary(hash)
+      block <- maybeBlock match {
+                case Some(b) => b.pure[F]
+                case None =>
+                  MonadThrowable[F].raiseError(
+                    new NoSuchElementException(
+                      s"BlockStore is missing hash ${PrettyPrinter.buildString(hash)}"
+                    )
+                  )
+              }
+    } yield block
+
   def unsafeGetBlock[F[_]: MonadThrowable: BlockStore](hash: BlockHash): F[Block] =
     for {
       maybeBlock <- BlockStore[F].getBlockMessage(hash)
@@ -92,10 +110,13 @@ object ProtoUtil {
     } yield block
 
   def creatorJustification(block: Block): Option[Justification] =
-    block.getHeader.justifications
+    creatorJustification(block.getHeader)
+
+  def creatorJustification(header: Block.Header): Option[Justification] =
+    header.justifications
       .find {
         case Justification(validator: Validator, _) =>
-          validator == block.getHeader.validatorPublicKey
+          validator == header.validatorPublicKey
       }
 
   def findCreatorJustificationAncestorWithSeqNum[F[_]: Monad: BlockStore](
@@ -151,7 +172,6 @@ object ProtoUtil {
   def getCreatorJustificationAsListUntilGoalInMemory[F[_]: Monad](
       blockDag: BlockDagRepresentation[F],
       blockHash: BlockHash,
-      validator: Validator,
       goalFunc: BlockHash => Boolean = _ => false
   ): F[List[BlockHash]] =
     (for {
@@ -192,14 +212,22 @@ object ProtoUtil {
       sortedWeights.take(maxCliqueMinSize).sum
     }
 
-  def mainParent[F[_]: Monad: BlockStore](block: Block): F[Option[Block]] = {
-    val maybeParentHash = block.getHeader.parentHashes.headOption
+  private def mainParent[F[_]: Monad: BlockStore](header: Block.Header): F[Option[BlockSummary]] = {
+    val maybeParentHash = header.parentHashes.headOption
     maybeParentHash match {
-      case Some(parentHash) => BlockStore[F].getBlockMessage(parentHash)
-      case None             => none[Block].pure[F]
+      case Some(parentHash) => BlockStore[F].getBlockSummary(parentHash)
+      case None             => none[BlockSummary].pure[F]
     }
   }
 
+  /** Computes block's score by the [validator].
+    *
+    * @param dag
+    * @param blockHash Block's hash
+    * @param validator Validator that produced the block
+    * @tparam F
+    * @return Weight `validator` put behind the block
+    */
   def weightFromValidatorByDag[F[_]: Monad](
       dag: BlockDagRepresentation[F],
       blockHash: BlockHash,
@@ -211,25 +239,34 @@ object ProtoUtil {
       resultOpt <- blockParentOpt.traverse { bh =>
                     dag.lookup(bh).map(_.get.weightMap.getOrElse(validator, 0L))
                   }
-      result <- resultOpt match {
-                 case Some(result) => result.pure[F]
-                 case None         => dag.lookup(blockHash).map(_.get.weightMap.getOrElse(validator, 0L))
-               }
+      result = resultOpt match {
+        case Some(result) => result
+        case None         => blockMetadata.get.weightMap.getOrElse(validator, 0L)
+      }
     } yield result
+
+  def weightFromValidator[F[_]: Monad: BlockStore](
+      header: Block.Header,
+      validator: Validator
+  ): F[Long] =
+    for {
+      maybeMainParent <- mainParent[F](header)
+      weightFromValidator = maybeMainParent
+        .map(p => weightMap(p.getHeader).getOrElse(validator, 0L))
+        .getOrElse(weightMap(header).getOrElse(validator, 0L)) //no parents means genesis -- use itself
+    } yield weightFromValidator
 
   def weightFromValidator[F[_]: Monad: BlockStore](
       b: Block,
       validator: ByteString
   ): F[Long] =
-    for {
-      maybeMainParent <- mainParent[F](b)
-      weightFromValidator = maybeMainParent
-        .map(weightMap(_).getOrElse(validator, 0L))
-        .getOrElse(weightMap(b).getOrElse(validator, 0L)) //no parents means genesis -- use itself
-    } yield weightFromValidator
+    weightFromValidator[F](b.getHeader, validator)
 
   def weightFromSender[F[_]: Monad: BlockStore](b: Block): F[Long] =
     weightFromValidator[F](b, b.getHeader.validatorPublicKey)
+
+  def weightFromSender[F[_]: Monad: BlockStore](header: Block.Header): F[Long] =
+    weightFromValidator[F](header, header.validatorPublicKey)
 
   def parentHashes(b: Block): Seq[ByteString] =
     b.getHeader.parentHashes
@@ -265,6 +302,9 @@ object ProtoUtil {
   def bonds(b: Block): Seq[Bond] =
     b.getHeader.getState.bonds
 
+  def bonds(b: BlockSummary): Seq[Bond] =
+    b.getHeader.getState.bonds
+
   def blockNumber(b: Block): Long =
     b.getHeader.rank
 
@@ -288,8 +328,7 @@ object ProtoUtil {
     }
 
   def toLatestMessage[F[_]: MonadThrowable: BlockStore](
-      justifications: Seq[Justification],
-      dag: BlockDagRepresentation[F]
+      justifications: Seq[Justification]
   ): F[immutable.Map[Validator, BlockMetadata]] =
     justifications.toList.foldM(Map.empty[Validator, BlockMetadata]) {
       case (acc, Justification(validator, hash)) =>
@@ -378,15 +417,17 @@ object ProtoUtil {
     ByteString.copyFrom(Base16.decode(string))
 
   def basicDeploy[F[_]: Monad: Time](
-      id: Int
+      nonce: Long
   ): F[Deploy] =
     Time[F].currentMillis.map { now =>
-      basicDeploy(now, ByteString.EMPTY)
+      basicDeploy(now, ByteString.EMPTY, nonce)
     }
 
   def basicDeploy(
       timestamp: Long,
-      sessionCode: ByteString = ByteString.EMPTY
+      sessionCode: ByteString = ByteString.EMPTY,
+      nonce: Long = 0,
+      accountPublicKey: ByteString = ByteString.EMPTY
   ): Deploy = {
     val b = Deploy
       .Body()
@@ -394,8 +435,9 @@ object ProtoUtil {
       .withPayment(Deploy.Code())
     val h = Deploy
       .Header()
-      .withAccountPublicKey(ByteString.EMPTY)
+      .withAccountPublicKey(accountPublicKey)
       .withTimestamp(timestamp)
+      .withNonce(nonce)
       .withBodyHash(protoHash(b))
     Deploy()
       .withDeployHash(protoHash(h))
@@ -404,34 +446,34 @@ object ProtoUtil {
   }
 
   // TODO: it is for testing
-  def basicProcessedDeploy[F[_]: Monad: Time](id: Int): F[Block.ProcessedDeploy] =
+  def basicProcessedDeploy[F[_]: Monad: Time](id: Long): F[Block.ProcessedDeploy] =
     basicDeploy[F](id).map(deploy => Block.ProcessedDeploy(deploy = Some(deploy)))
 
-  def sourceDeploy(source: String, timestamp: Long, gasLimit: Long): Deploy =
-    sourceDeploy(ByteString.copyFromUtf8(source), timestamp, gasLimit)
+  def sourceDeploy(source: String, timestamp: Long): Deploy =
+    sourceDeploy(ByteString.copyFromUtf8(source), timestamp)
 
-  def sourceDeploy(sessionCode: ByteString, timestamp: Long, gasLimit: Long): Deploy =
+  def sourceDeploy(sessionCode: ByteString, timestamp: Long): Deploy =
     basicDeploy(timestamp, sessionCode)
 
   // https://casperlabs.atlassian.net/browse/EE-283
   // We are hardcoding exchange rate for DEV NET at 10:1
-  // (1 token buys you 10 units of gas).
+  // (1 gas costs you 10 tokens).
   // Later, post DEV NET, conversion rate will be part of a deploy.
-  val GAS_PRICE = 10
-  val GAS_LIMIT = 100000000L
+  val GAS_PRICE      = 10L
+  val PAYMENT_TOKENS = 1000000000L
 
   def deployDataToEEDeploy(d: Deploy): ipc.Deploy = ipc.Deploy(
     address = d.getHeader.accountPublicKey,
-    timestamp = d.getHeader.timestamp,
     session = d.getBody.session.map { case Deploy.Code(code, args) => ipc.DeployCode(code, args) },
     payment = d.getBody.payment.map { case Deploy.Code(code, args) => ipc.DeployCode(code, args) },
     // The new data type doesn't have a limit field. Remove this once payment is implemented.
-    gasLimit =
-      if (d.getBody.getPayment.code.isEmpty || d.getBody.getPayment == d.getBody.getSession) {
-        sys.env.get("CL_DEFAULT_GAS_LIMIT").map(_.toLong).getOrElse(GAS_LIMIT)
+    tokensTransferredInPayment =
+      if (d.getBody.getPayment.code.isEmpty || d.getBody.getPayment.code == d.getBody.getSession.code) {
+        sys.env.get("CL_DEFAULT_PAYMENT_TOKENS").map(_.toLong).getOrElse(PAYMENT_TOKENS)
       } else 0L,
     gasPrice = GAS_PRICE,
-    nonce = d.getHeader.nonce
+    nonce = d.getHeader.nonce,
+    authorizationKeys = d.approvals.map(_.approverPublicKey)
   )
 
   def dependenciesHashesOf(b: Block): List[BlockHash] = {
@@ -441,4 +483,15 @@ object ProtoUtil {
       .toSet
     (missingParents union missingJustifications).toList
   }
+
+  implicit class DeployOps(d: Deploy) {
+    def incrementNonce(): Deploy =
+      this.withNonce(d.header.get.nonce + 1)
+
+    def withNonce(newNonce: Long): Deploy =
+      d.withHeader(d.header.get.withNonce(newNonce))
+  }
+
+  def randomAccountAddress(): ByteString =
+    ByteString.copyFrom(scala.util.Random.nextString(32), "UTF-8")
 }

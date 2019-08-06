@@ -6,14 +6,15 @@ import cats.{Applicative, ApplicativeError}
 import com.google.protobuf.ByteString
 import io.casperlabs.blockstorage.BlockStore.{BlockHash, DeployHash}
 import io.casperlabs.blockstorage.{BlockDagRepresentation, InMemBlockDagStorage, InMemBlockStore}
+import io.casperlabs.casper
 import io.casperlabs.casper.HashSetCasperTest.{buildGenesis, createBonds}
 import io.casperlabs.casper._
 import io.casperlabs.casper.consensus.BlockSummary
-import io.casperlabs.casper.genesis.contracts.Faucet
 import io.casperlabs.casper.helper.{
   BlockDagStorageTestFixture,
   HashSetCasperTestNode,
-  NoOpsCasperEffect
+  NoOpsCasperEffect,
+  NoOpsLastFinalizedBlockHashContainer
 }
 import io.casperlabs.casper.protocol.{NoApprovedBlockAvailable, _}
 import io.casperlabs.casper.util.TestTime
@@ -26,6 +27,8 @@ import io.casperlabs.casper.util.comm.CasperPacketHandler.{
   StandaloneCasperHandler
 }
 import io.casperlabs.casper.util.comm.CasperPacketHandlerSpec._
+import io.casperlabs.casper.Estimator.Validator
+import io.casperlabs.casper.validation.ValidationImpl
 import io.casperlabs.catscontrib.ApplicativeError_
 import io.casperlabs.catscontrib.TaskContrib._
 import io.casperlabs.comm.discovery.Node
@@ -49,6 +52,7 @@ import monix.execution.Scheduler
 import org.scalatest.{Matchers, WordSpec}
 
 import scala.concurrent.duration._
+import io.casperlabs.shared.FilesAPI
 
 class CasperPacketHandlerSpec extends WordSpec with Matchers {
   private def setup() = new {
@@ -60,7 +64,7 @@ class CasperPacketHandlerSpec extends WordSpec with Matchers {
     val requiredSigs               = 1
     val deployTimestamp            = 1L
     val BlockMsgWithTransform(Some(genesis), transforms) =
-      buildGenesis(Seq.empty, bonds, 1L, Long.MaxValue, Faucet.noopFaucet, 1L)
+      buildGenesis(Seq.empty, bonds, 1L, Long.MaxValue, deployTimestamp)
     val validatorId       = ValidatorIdentity(validatorPk, validatorSk, Ed25519)
     val storageSize: Long = 1024L * 1024
 
@@ -68,13 +72,18 @@ class CasperPacketHandlerSpec extends WordSpec with Matchers {
 
     val bap = new BlockApproverProtocol(
       validatorId,
-      deployTimestamp,
       bonds,
       Seq.empty,
-      1L,
-      Long.MaxValue,
-      false,
-      requiredSigs
+      BlockApproverProtocol.GenesisConf(
+        minimumBond = 1L,
+        maximumBond = Long.MaxValue,
+        requiredSigs = requiredSigs,
+        genesisAccountPublicKeyPath = None,
+        initialTokens = 0L,
+        mintCodePath = None,
+        posCodePath = None,
+        bondsPath = None
+      )
     )
     val local: Node = peerNode("src", 40400)
     val chainId     = "test-chainId"
@@ -86,6 +95,7 @@ class CasperPacketHandlerSpec extends WordSpec with Matchers {
     implicit val rpConf         = createRPConfAsk[Task](local)
     implicit val time           = TestTime.instance
     implicit val log            = new LogStub[Task]
+    implicit val filesApi       = FilesAPI.create[Task]
     implicit val errHandler =
       ApplicativeError_.applicativeError(new ApplicativeError[Task, CommError] {
         override def raiseError[A](e: CommError): Task[A] =
@@ -108,12 +118,15 @@ class CasperPacketHandlerSpec extends WordSpec with Matchers {
       .create[Task]
       .unsafeRunSync(monix.execution.Scheduler.Implicits.global)
     implicit val casperRef = MultiParentCasperRef.unsafe[Task](None)
-    implicit val safetyOracle = new SafetyOracle[Task] {
+    implicit val safetyOracle = new FinalityDetector[Task] {
       override def normalizedFaultTolerance(
           blockDag: BlockDagRepresentation[Task],
           estimateBlockHash: BlockHash
       ): Task[Float] = Task.pure(1.0f)
     }
+    implicit val raiseInvalidBlock =
+      casper.validation.raiseValidateErrorThroughApplicativeError[Task]
+    implicit val validation = new ValidationImpl[Task]
   }
 
   "CasperPacketHandler" when {
@@ -124,6 +137,8 @@ class CasperPacketHandlerSpec extends WordSpec with Matchers {
         val fixture      = setup()
         import fixture._
 
+        implicit val lastFinalizedBlockHashContainer =
+          NoOpsLastFinalizedBlockHashContainer.create[Task](genesis.blockHash)
         val ref =
           Ref.unsafe[Task, CasperPacketHandlerInternal[Task]](
             new GenesisValidatorHandler(validatorId, chainId, bap)
@@ -146,7 +161,8 @@ class CasperPacketHandlerSpec extends WordSpec with Matchers {
             blockApproval.toByteString
           )
           _ = {
-            log.warns shouldBe empty
+            log.warns.size shouldBe 1
+            log.warns.head should include("Unable to construct blessed terms")
             transportLayer.requests should not be empty
             val lastMessage = transportLayer.requests.last
             assert(lastMessage.peer == local && lastMessage.msg == expectedPacket)
@@ -159,6 +175,9 @@ class CasperPacketHandlerSpec extends WordSpec with Matchers {
         implicit val ctx = Scheduler.global
         val fixture      = setup()
         import fixture._
+
+        implicit val lastFinalizedBlockHashContainer =
+          NoOpsLastFinalizedBlockHashContainer.create[Task](genesis.blockHash)
 
         val ref =
           Ref.unsafe[Task, CasperPacketHandlerInternal[Task]](
@@ -224,6 +243,8 @@ class CasperPacketHandlerSpec extends WordSpec with Matchers {
           refCasper           <- Ref.of[Task, CasperPacketHandlerInternal[Task]](standaloneCasper)
           casperPacketHandler = new CasperPacketHandlerImpl[Task](refCasper, Some(validatorId))
           c1                  = abp.run().forkAndForget.runToFuture
+          implicit0(lastFinalizedBlockHashContainer: LastFinalizedBlockHashContainer[Task]) = NoOpsLastFinalizedBlockHashContainer
+            .create[Task](genesis.blockHash)
           c2 = StandaloneCasperHandler
             .approveBlockInterval(
               interval,
@@ -271,6 +292,8 @@ class CasperPacketHandlerSpec extends WordSpec with Matchers {
 
         val validators = Set(PublicKey(ByteString.copyFrom(validatorPk)))
 
+        implicit val lastFinalizedBlockHashContainer =
+          NoOpsLastFinalizedBlockHashContainer.create[Task](genesis.blockHash)
         // interval and duration don't really matter since we don't require and signs from validators
         val bootstrapCasper =
           new BootstrapCasperHandler[Task](

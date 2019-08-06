@@ -1,10 +1,12 @@
 package io.casperlabs.blockstorage
 
+import cats.implicits._
+import cats.Monad
 import com.google.protobuf.ByteString
 import io.casperlabs.blockstorage.BlockDagRepresentation.Validator
 import io.casperlabs.blockstorage.BlockStore.BlockHash
 import io.casperlabs.casper.consensus.Block
-import io.casperlabs.metrics.{Metered, Metrics}
+import io.casperlabs.metrics.Metered
 
 trait BlockDagStorage[F[_]] {
   def getRepresentation: F[BlockDagRepresentation[F]]
@@ -31,7 +33,10 @@ object BlockDagStorage {
 }
 
 trait BlockDagRepresentation[F[_]] {
-  def children(blockHash: BlockHash): F[Option[Set[BlockHash]]]
+  def children(blockHash: BlockHash): F[Set[BlockHash]]
+
+  /** Return blocks that having a specify justification */
+  def justificationToBlocks(blockHash: BlockHash): F[Option[Set[BlockHash]]]
   def lookup(blockHash: BlockHash): F[Option[BlockMetadata]]
   def contains(blockHash: BlockHash): F[Boolean]
 
@@ -51,4 +56,27 @@ trait BlockDagRepresentation[F[_]] {
 
 object BlockDagRepresentation {
   type Validator = ByteString
+
+  implicit class BlockDagRepresentationRich[F[_]](
+      blockDagRepresentation: BlockDagRepresentation[F]
+  ) {
+    def getMainChildren(
+        blockHash: BlockHash
+    )(implicit monad: Monad[F]): F[List[BlockHash]] =
+      blockDagRepresentation
+        .children(blockHash)
+        .flatMap(
+          _.toList
+            .filterA(
+              child =>
+                blockDagRepresentation.lookup(child).map {
+                  // make sure child's main parent's hash equal to `blockHash`
+                  case Some(blockMetadata) => blockMetadata.parents.head == blockHash
+                  case None                => false
+                }
+            )
+        )
+  }
+
+  def apply[F[_]](implicit ev: BlockDagRepresentation[F]): BlockDagRepresentation[F] = ev
 }
