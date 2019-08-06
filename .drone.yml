@@ -149,8 +149,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - sbt-test-docker-bors
 
 - name: run-cargo-fmt-bors
   commands:
@@ -165,6 +163,7 @@ steps:
     - trying
   depends_on:
   - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: run-rust-lints-bors
   commands:
@@ -179,6 +178,7 @@ steps:
     - trying
   depends_on:
   - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: try-cargo-publish-bors
   commands:
@@ -191,6 +191,7 @@ steps:
     - trying
   depends_on:
   - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: run-rust-benchmarks-bors
   commands:
@@ -224,6 +225,7 @@ steps:
     - staging
     - trying
   depends_on:
+  - rust-compile-test-bors
   - sbt-test-docker-bors
 
 - name: docker-keys-gen-test-bors
