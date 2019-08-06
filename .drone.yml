@@ -324,9 +324,9 @@ steps:
     - master
     event:
     - push
-  depends_on:
-  - package-sbt-artifacts-merge
-  - package-ee
+#  depends_on:
+#  - package-sbt-artifacts-merge
+#  - package-ee
 
 - name: docker-build-ee-merge
   commands:
