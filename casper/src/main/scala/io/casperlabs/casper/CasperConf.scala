@@ -30,11 +30,8 @@ final case class CasperConf(
     walletsFile: Path,
     minimumBond: Long,
     maximumBond: Long,
+    hasFaucet: Boolean,
     requiredSigs: Int,
-    genesisAccountPublicKeyPath: Option[Path],
-    initialTokens: BigInt,
-    mintCodePath: Option[Path],
-    posCodePath: Option[Path],
     shardId: String,
     standalone: Boolean,
     approveGenesis: Boolean,
@@ -46,9 +43,7 @@ final case class CasperConf(
     autoProposeCheckInterval: FiniteDuration,
     autoProposeMaxInterval: FiniteDuration,
     autoProposeMaxCount: Int
-) extends SubConfig {
-  def chainId = shardId
-}
+) extends SubConfig
 
 object CasperConf {
   private implicit val logSource: LogSource = LogSource(this.getClass)

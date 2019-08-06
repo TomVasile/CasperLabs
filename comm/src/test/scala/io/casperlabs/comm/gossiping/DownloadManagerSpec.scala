@@ -24,7 +24,7 @@ import org.scalacheck.{Arbitrary, Gen}
 import Arbitrary.arbitrary
 import io.casperlabs.comm.gossiping.DownloadManagerImpl.RetriesConf
 import monix.execution.schedulers.TestScheduler
-import scala.concurrent.TimeoutException
+
 import scala.concurrent.duration._
 
 class DownloadManagerSpec
@@ -228,7 +228,7 @@ class DownloadManagerSpec
             regetter = { get =>
               for {
                 _ <- Task.delay({ started = true })
-                _ <- Task.sleep(1.second)
+                _ <- Task.sleep(750.millis)
                 _ <- Task.delay({ finished = true })
                 r <- get
               } yield r
@@ -245,22 +245,17 @@ class DownloadManagerSpec
                     retriesConf = RetriesConf.noRetries
                   ).allocated
           (manager, release) = alloc
-          w                  <- manager.scheduleDownload(summaryOf(block), source, relay = false)
-          // Allow some time for the download to start.
-          _ <- Task.sleep(250.millis)
-          // Cancel the download.
-          _ <- release
-          // Allow some time for it to finish, if it's not canceled.
-          r <- w.timeout(1250.millis).attempt
+          _                  <- manager.scheduleDownload(summaryOf(block), source, relay = false)
+          _                  <- Task.sleep(500.millis)
+          _                  <- release
+          _                  <- Task.sleep(500.millis)
         } yield {
-          r.isLeft shouldBe true
-          r.left.get shouldBe a[TimeoutException]
+          backend.summaries should not contain (block.blockHash)
           started shouldBe true
           finished shouldBe false
-          backend.summaries should not contain (block.blockHash)
         }
 
-        test.runSyncUnsafe(5.seconds)
+        test.runSyncUnsafe(2.seconds)
       }
 
       "reject further schedules" in {
@@ -406,41 +401,41 @@ class DownloadManagerSpec
       "try again later with exponential backoff" in {
         TestFixture(
           remote = _ => Task.raiseError(io.grpc.Status.UNAVAILABLE.asRuntimeException()),
-          // * -> 1 second -> * -> 2 seconds -> *  -> fail
-          retriesConf = RetriesConf(2, 1.second, 2.0),
+          // * -> 1 second -> * -> 2 seconds -> * -> 4 seconds -> fail
+          retriesConf = RetriesConf(3, 1.second, 2.0),
           timeout = 10.seconds
         ) {
           case (manager, _) =>
             for {
               w <- manager
                     .scheduleDownload(summaryOf(block), source, false)
-              _ <- Task.sleep(200.millis)
+              _ <- Task.sleep(500.milliseconds)
               _ <- Task {
                     log.warns should have size 1
                     log.warns.last should include("attempt: 1")
                   }
-              _ <- Task.sleep(1800.millis)
+              _ <- Task.sleep(1.second)
               _ <- Task {
                     log.warns should have size 2
                     log.warns.last should include("attempt: 2")
                   }
-              _ <- Task.sleep(2000.millis)
+              _ <- Task.sleep(2.seconds)
               _ <- Task {
                     log.warns should have size 3
                     log.warns.last should include("attempt: 3")
                   }
-              // Next try would be after 4 second delay, but it shouldn't try any more.
-              _ <- Task.sleep(4000.millis)
+              _ <- Task.sleep(5.seconds)
               _ <- Task {
                     log.warns should have size 3
                     log.warns.last should include("attempt: 3")
                     log.causes should have size 1
+                    log.causes.head shouldBe an[DownloadManagerImpl.RetriesFailure]
+                    log.causes.head
+                      .asInstanceOf[DownloadManagerImpl.RetriesFailure]
+                      .getCause shouldBe an[io.grpc.StatusRuntimeException]
                   }
-              r <- w.attempt
-            } yield {
-              r.isLeft shouldBe true
-              r.left.get shouldBe an[io.grpc.StatusRuntimeException]
-            }
+              _ <- w.attempt
+            } yield ()
         }
       }
     }
@@ -459,7 +454,7 @@ class DownloadManagerSpec
           }
         }
 
-      def withRechunking(f: Iterant[Task, Chunk] => Iterant[Task, Chunk]) = { _: Node =>
+      def withRechunking(f: Iterant[Task, Chunk] => Iterant[Task, Chunk]) = { (node: Node) =>
         MockGossipService(Seq(block), rechunker = f)
       }
 
@@ -565,7 +560,7 @@ object DownloadManagerSpec {
       )
 
       val runTest = managerR.use { manager =>
-        test((manager, backend))
+        test(manager, backend)
       }
 
       runTest.runSyncUnsafe(timeout)
@@ -616,7 +611,6 @@ object DownloadManagerSpec {
   object MockGossipService {
     private val emptySynchronizer = new Synchronizer[Task] {
       def syncDag(source: Node, targetBlockHashes: Set[ByteString]) = ???
-      def downloaded(blockHash: ByteString): Task[Unit]             = ???
     }
     private val emptyDownloadManager = new DownloadManager[Task] {
       def scheduleDownload(summary: BlockSummary, source: Node, relay: Boolean) = ???

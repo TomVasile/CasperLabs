@@ -27,7 +27,6 @@ import monix.reactive._
 
 import scala.concurrent.duration._
 import scala.util._
-import scala.util.control.NonFatal
 
 class TcpTransportLayer(
     port: Int,
@@ -64,7 +63,7 @@ class TcpTransportLayer(
         .clientAuth(ClientAuth.REQUIRE)
         .build()
     } catch {
-      case NonFatal(e) =>
+      case e: Throwable =>
         e.printStackTrace()
         throw e
     }
@@ -76,7 +75,7 @@ class TcpTransportLayer(
       builder.keyManager(certInputStream, keyInputStream)
       builder.build
     } catch {
-      case NonFatal(e) =>
+      case e: Throwable =>
         println(e.getMessage)
         throw e
     }
@@ -274,7 +273,7 @@ class TcpTransportLayer(
     cell.modify { s =>
       val parallelism = Math.max(Runtime.getRuntime.availableProcessors(), 2)
       val queueScheduler =
-        Scheduler.fixedPool("tl-dispatcher", parallelism, reporter = UncaughtExceptionHandler)
+        Scheduler.fixedPool("tl-dispatcher", parallelism, reporter = UncaughtExceptionLogger)
       for {
         server <- initQueue(s.server) {
                    Task.delay {

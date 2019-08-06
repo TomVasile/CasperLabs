@@ -98,7 +98,7 @@ class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConse
       ) { approver =>
         for {
           r0 <- approver.getCandidate
-          _  <- Task.sleep(500.millis)
+          _  <- Task.sleep(200.millis)
           r1 <- approver.getCandidate
         } yield {
           r0.isLeft shouldBe true
@@ -109,12 +109,10 @@ class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConse
     }
 
     "keep polling until the transition can be made" in {
-      // We're going to keep adding approvals to the candidate from the test.
       @volatile var candidate = GenesisCandidate(genesis.blockHash)
 
       def addApproval() = Task.delay {
         val n = candidate.approvals.size
-        // The next validator signs it, so it's a valid signature.
         val a = genesis.getHeader.getState.bonds.drop(n).take(1).map { b =>
           Approval(b.validatorPublicKey).withSignature(sample(arbitrary[Signature]))
         }
@@ -124,23 +122,20 @@ class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConse
       TestFixture.fromBootstrap(
         remoteCandidate = () => Task.delay(candidate),
         environment = new MockEnvironment() {
-          // Need 2 signatures.
           override def canTransition(block: Block, signatories: Set[ByteString]): Boolean =
             signatories.size > 1
         },
         pollInterval = 10.millis
       ) { approver =>
-        val ops = List.fill(4) {
+        val ops = List.fill(5) {
           for {
-            _ <- Task.sleep(200.millis)
-            // Ask the approver itself what it thinks the candidate is.
-            // We keep adding approvals here but it should top at approvals.
+            _ <- Task.sleep(50.millis)
             r <- approver.getCandidate
             _ <- addApproval()
           } yield r.right.get.approvals.size
         }
         ops.sequence.map {
-          _ shouldBe List(0, 1, 2, 2)
+          _ shouldBe List(0, 1, 2, 2, 2)
         }
       }
     }
@@ -252,7 +247,7 @@ class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConse
         relayFactor = 5
       ) { approver =>
         for {
-          _ <- Task.sleep(500.millis)
+          _ <- Task.sleep(50.millis)
           r <- approver.getCandidate
         } yield {
           r.isRight shouldBe true
@@ -428,7 +423,7 @@ class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConse
       TestFixture.fromGenesis(
         relayFactor = 3,
         gossipService = service
-      ) { _ =>
+      ) { approver =>
         for {
           _ <- Task.sleep(100.millis)
           _ = service.received shouldBe (1 + 3)
@@ -447,7 +442,7 @@ class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConse
           r0 <- approver.awaitApproval.timeout(Duration.Zero).attempt
           _  = r0.isLeft shouldBe true
           _  <- approver.addApproval(genesis.blockHash, correctApproval)
-          _  <- approver.awaitApproval
+          r1 <- approver.awaitApproval
         } yield ()
       }
     }
@@ -476,9 +471,9 @@ object GenesisApproverSpec extends ArbitraryConsensus {
     .withApproverPublicKey(genesis.getHeader.getState.bonds.last.validatorPublicKey)
 
   class MockNodeDiscovery(peers: List[Node]) extends NodeDiscovery[Task] {
-    override def discover                            = ???
-    override def lookup(id: NodeIdentifier)          = ???
-    override def recentlyAlivePeersAscendingDistance = Task.now(peers)
+    override def discover                    = ???
+    override def lookup(id: NodeIdentifier)  = ???
+    override def alivePeersAscendingDistance = Task.now(peers)
   }
 
   class MockGossipService extends GossipService[Task] {

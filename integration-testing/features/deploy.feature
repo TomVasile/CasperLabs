@@ -40,46 +40,29 @@ Feature: Deploy Operation
       When: Deploy is performed with all fields
       Then: Deploy is successful
 
-  # Implemented: test_nonce.py : test_deploy_without_nonce
+  #Not Implemented
   Scenario: Deploy without nonce
-     Given: Single Node Network
+     Given: Client exists
       When: Deploy is performed with all fields except nonce
       Then: Client error occurs
 
-  # Implemented: test_nonce.py : test_deploy_with_lower_nonce
+  #Not Implemented
   Scenario: Deploy with lower nonce
      Given: Single Node Network
-       And: Nonce is 3 for account
-      When: Deploy is performed with nonce of 2
+       And: Nonce is 4 for account
+      When: Deploy is performed with nonce of 3
       Then: Block proposed shows error because of nonce
 
-  # Implemented: test_nonce.py : test_deploy_with_higher_nonce
+  #Not Implemented
   Scenario: Deploy with higher nonce
      Given: Single Node Network
-       And: Nonce is 1 for account
-      When: Deploy is performed with nonce of 3
-      Then: Propose will fail
-       And: Deploy with nonce of 2 is successful
-       And: Propose of block deployed with nonce of 2 is successful
-       And: Subsequent propose of block deployed with nonce of 3 is successful
+       And: Nonce is 4 for account
+      When: Deploy is performed with nonce of 5
+      Then: TODO: Does this hang until nonce of 4 is deployed???
 
-  # Implemented: test_nonce.py : test_deploy_with_higher_nonce_does_not_include_previous_deploy
-  Scenario: Deploy with higher nonce and created block does not include previously deployed contract
-     Given: Single Node Network
-       And: Nonce is 1 for account
-      When: Deploy is performed with nonce of 4
-      Then: Propose will fail
-       And: Deploy with nonce of 2 is successful
-       And: Propose of block deployed with nonce of 2 is successful
-       And: Previous propose of block deployed with nonce of 4 is still a failure and deploy
-            will stay in the deploy buffers.
-       And: Propose of block deployed with nonce of 3 is successful and this causes propose of block with
-            nonce of 4 becomes success finally.
-
-
-  # Implemented: test_nonce.py : test_deploy_with_lower_nonce (first part of the test)
+  #Not Implemented
   Scenario: Deploy with correct nonce
      Given: Single Node Network
-       And: Nonce is 3 for account
+       And: Nonce is 4 for account
       When: Deploy is performed with nonce of 4
       Then: Block is proposed with successful execution

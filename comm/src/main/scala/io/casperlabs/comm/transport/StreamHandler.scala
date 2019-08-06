@@ -5,7 +5,6 @@ import java.nio.file.{Files, Path}
 
 import cats.data._
 import cats.implicits._
-import com.github.ghik.silencer.silent
 import io.casperlabs.shared.PathOps._
 import io.casperlabs.comm.discovery.Node
 import io.casperlabs.comm.protocol.routing._
@@ -17,7 +16,6 @@ import io.casperlabs.shared._
 import monix.eval.Task
 import monix.reactive.Observable
 
-@silent()
 object StreamHandler {
 
   type CircuitBreaker = Long => Boolean

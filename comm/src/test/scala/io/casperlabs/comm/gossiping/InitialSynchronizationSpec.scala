@@ -2,7 +2,6 @@ package io.casperlabs.comm.gossiping
 
 import java.util.concurrent.TimeoutException
 
-import cats.syntax.either._
 import cats.effect.concurrent.Semaphore
 import com.google.protobuf.ByteString
 import eu.timepit.refined._
@@ -13,7 +12,6 @@ import io.casperlabs.casper.consensus.{Approval, BlockSummary, GenesisCandidate}
 import io.casperlabs.comm.discovery.{Node, NodeDiscovery, NodeIdentifier}
 import io.casperlabs.comm.gossiping.InitialSynchronizationImpl.SynchronizationError
 import io.casperlabs.comm.gossiping.InitialSynchronizationSpec.TestFixture
-import io.casperlabs.comm.gossiping.Synchronizer.SyncError
 import io.casperlabs.shared.Log.NOPLog
 import io.casperlabs.metrics.Metrics
 import monix.eval.Task
@@ -56,7 +54,7 @@ class InitialSynchronizationSpec
         ) { (initialSynchronizer, _) =>
           for {
             w <- initialSynchronizer.sync()
-            _ <- w.timeout(1.second)
+            _ <- w.timeout(250.millis)
           } yield {
             counter.get() shouldBe 2
           }
@@ -205,9 +203,9 @@ object InitialSynchronizationSpec extends ArbitraryConsensus {
   implicit val metris  = new Metrics.MetricsNOP[Task]
 
   class MockNodeDiscovery(nodes: List[Node]) extends NodeDiscovery[Task] {
-    def discover                            = ???
-    def lookup(id: NodeIdentifier)          = ???
-    def recentlyAlivePeersAscendingDistance = Task.now(nodes)
+    def discover                    = ???
+    def lookup(id: NodeIdentifier)  = ???
+    def alivePeersAscendingDistance = Task.now(nodes)
   }
 
   object MockBackend extends GossipServiceServer.Backend[Task] {
@@ -218,7 +216,6 @@ object InitialSynchronizationSpec extends ArbitraryConsensus {
 
   object MockSynchronizer extends Synchronizer[Task] {
     def syncDag(source: Node, targetBlockHashes: Set[ByteString]) = ???
-    def downloaded(blockHash: ByteString): Task[Unit]             = ???
   }
 
   object MockDownloadManager extends DownloadManager[Task] {
@@ -254,10 +251,9 @@ object InitialSynchronizationSpec extends ArbitraryConsensus {
     override def newBlocksSynchronous(
         request: NewBlocksRequest,
         skipRelaying: Boolean
-    ): Task[Either[SyncError, NewBlocksResponse]] = {
+    ): Task[NewBlocksResponse] = {
       asked.transform(_ :+ request.getSender)
-      sync(request.getSender, request.blockHashes)
-        .map(b => NewBlocksResponse(isNew = b).asRight[SyncError])
+      sync(request.getSender, request.blockHashes).map(b => NewBlocksResponse(isNew = b))
     }
   }
 

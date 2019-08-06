@@ -2,14 +2,12 @@ package io.casperlabs.node.api
 
 import cats.Id
 import cats.effect.concurrent.Semaphore
-import cats.effect.{Effect => _, _}
+import cats.effect.{Concurrent, ConcurrentEffect, ContextShift, Resource, Sync, Timer}
 import cats.implicits._
 import io.casperlabs.blockstorage.BlockStore
 import io.casperlabs.casper.MultiParentCasperRef.MultiParentCasperRef
-import io.casperlabs.casper.FinalityDetector
-import io.casperlabs.casper.consensus.Block
+import io.casperlabs.casper.SafetyOracle
 import io.casperlabs.casper.protocol.CasperMessageGrpcMonix
-import io.casperlabs.casper.validation.Validation
 import io.casperlabs.comm.discovery.{NodeDiscovery, NodeIdentifier}
 import io.casperlabs.comm.grpc.{ErrorInterceptor, GrpcServer, MetricsInterceptor}
 import io.casperlabs.comm.rp.Connect.ConnectionsCell
@@ -18,7 +16,7 @@ import io.casperlabs.node._
 import io.casperlabs.node.api.casper.CasperGrpcMonix
 import io.casperlabs.node.api.control.ControlGrpcMonix
 import io.casperlabs.node.api.diagnostics.DiagnosticsGrpcMonix
-import io.casperlabs.node.api.graphql.{FinalizedBlocksStream, GraphQL}
+import io.casperlabs.node.api.graphql.{Fs2SubscriptionStream, GraphQL, GraphQLSchema}
 import io.casperlabs.node.configuration.Configuration
 import io.casperlabs.node.diagnostics.effects.diagnosticsService
 import io.casperlabs.node.diagnostics.{JvmMetrics, NewPrometheusReporter, NodeMetrics}
@@ -28,16 +26,15 @@ import kamon.Kamon
 import monix.eval.{Task, TaskLike}
 import monix.execution.Scheduler
 import org.http4s.implicits._
+
+import scala.concurrent.duration._
 import org.http4s.server.Router
 import org.http4s.server.blaze.BlazeServerBuilder
+import sangria.execution.Executor
 
 import scala.concurrent.ExecutionContext
-import io.netty.handler.ssl.SslContext
 
 object Servers {
-
-  private def logStarted[F[_]: Log](name: String, port: Int, isSsl: Boolean) =
-    Log[F].info(s"$name gRPC services started on port ${port}${if (isSsl) " using SSL" else ""}.")
 
   /** Start a gRPC server with services meant for the operators.
     * This port shouldn't be exposed to the internet, or some endpoints
@@ -46,8 +43,7 @@ object Servers {
       port: Int,
       maxMessageSize: Int,
       grpcExecutor: Scheduler,
-      blockApiLock: Semaphore[Effect],
-      maybeSslContext: Option[SslContext]
+      blockApiLock: Semaphore[Effect]
   )(
       implicit
       log: Log[Effect],
@@ -77,20 +73,18 @@ object Servers {
       interceptors = List(
         new MetricsInterceptor(),
         ErrorInterceptor.default
-      ),
-      sslContext = maybeSslContext
+      )
     ) *> Resource.liftF(
-      logStarted[Effect]("Internal", port, maybeSslContext.isDefined)
+      Log[Effect].info(s"Internal gRPC services started on port ${port}.")
     )
 
   /** Start a gRPC server with services meant for users and dApp developers. */
-  def externalServersR[F[_]: Concurrent: TaskLike: Log: MultiParentCasperRef: Metrics: FinalityDetector: BlockStore: ExecutionEngineService: Validation](
+  def externalServersR[F[_]: Concurrent: TaskLike: Log: MultiParentCasperRef: Metrics: SafetyOracle: BlockStore: ExecutionEngineService](
       port: Int,
       maxMessageSize: Int,
       grpcExecutor: Scheduler,
       blockApiLock: Semaphore[F],
-      ignoreDeploySignature: Boolean,
-      maybeSslContext: Option[SslContext]
+      ignoreDeploySignature: Boolean
   )(implicit scheduler: Scheduler, logId: Log[Id], metricsId: Metrics[Id]): Resource[F, Unit] =
     GrpcServer(
       port = port,
@@ -109,14 +103,11 @@ object Servers {
       interceptors = List(
         new MetricsInterceptor(),
         ErrorInterceptor.default
-      ),
-      sslContext = maybeSslContext
-    ) *>
-      Resource.liftF(
-        logStarted[F]("External", port, maybeSslContext.isDefined)
       )
+    ) *>
+      Resource.liftF(Log[F].info(s"External gRPC services started on port ${port}."))
 
-  def httpServerR[F[_]: Log: NodeDiscovery: ConnectionsCell: Timer: ConcurrentEffect: MultiParentCasperRef: FinalityDetector: BlockStore: ContextShift: FinalizedBlocksStream: ExecutionEngineService](
+  def httpServerR[F[_]: Log: NodeDiscovery: ConnectionsCell: Timer: ConcurrentEffect: MultiParentCasperRef: SafetyOracle: BlockStore: ContextShift](
       port: Int,
       conf: Configuration,
       id: NodeIdentifier,

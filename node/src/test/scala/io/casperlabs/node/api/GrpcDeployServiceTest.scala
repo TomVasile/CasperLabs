@@ -2,7 +2,6 @@ package io.casperlabs.node.api
 
 import io.casperlabs.crypto.codec.Base16
 import io.casperlabs.ipc
-import io.casperlabs.casper.consensus.state
 import io.casperlabs.node.api.GrpcDeployService.splitPath
 import monix.eval.Task
 import monix.execution.Scheduler.Implicits.global
@@ -13,15 +12,15 @@ class GrpcCasperService extends FlatSpec with EitherValues with Matchers {
   def attemptToKeyTest(
       nBytes: Int,
       keyType: String,
-      typeTest: state.Key.Value => Boolean,
-      bytesExtract: state.Key.Value => Array[Byte]
+      typeTest: ipc.Key.KeyInstance => Boolean,
+      bytesExtract: ipc.Key.KeyInstance => Array[Byte]
   ) = {
     val keyValue = randomBytes(nBytes)
 
     val maybeKey = attemptToKey(keyType, keyValue)
     maybeKey.isRight shouldBe true
 
-    val state.Key(key) = maybeKey.right.get
+    val ipc.Key(key) = maybeKey.right.get
     typeTest(key) shouldBe true
 
     val bytes = bytesExtract(key)
@@ -29,7 +28,7 @@ class GrpcCasperService extends FlatSpec with EitherValues with Matchers {
   }
 
   "toKey" should "convert a hash-type key successfully" in {
-    attemptToKeyTest(32, "hash", _.isHash, _.hash.get.hash.toByteArray)
+    attemptToKeyTest(32, "hash", _.isHash, _.hash.get.key.toByteArray)
   }
 
   it should "convert a uref-type key successfully" in {
@@ -37,7 +36,7 @@ class GrpcCasperService extends FlatSpec with EitherValues with Matchers {
   }
 
   it should "convert an address-type key successfully" in {
-    attemptToKeyTest(32, "address", _.isAddress, _.address.get.account.toByteArray)
+    attemptToKeyTest(32, "address", _.isAccount, _.account.get.account.toByteArray)
   }
 
   it should "fail for any invalid key type" in {
@@ -84,6 +83,6 @@ class GrpcCasperService extends FlatSpec with EitherValues with Matchers {
   private def randomBytes(length: Int): String =
     Base16.encode(Array.fill(length)(util.Random.nextInt(256).toByte))
 
-  private def attemptToKey(keyType: String, keyValue: String): Either[Throwable, state.Key] =
-    Utils.toKey[Task](keyType, keyValue).attempt.runSyncUnsafe()
+  private def attemptToKey(keyType: String, keyValue: String): Either[Throwable, ipc.Key] =
+    GrpcDeployService.toKey[Task](keyType, keyValue).attempt.runSyncUnsafe()
 }

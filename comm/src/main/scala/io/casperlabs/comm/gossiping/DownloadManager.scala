@@ -83,6 +83,10 @@ object DownloadManagerImpl {
     final case class DownloadFailure[F[_]](blockHash: ByteString, ex: Throwable) extends Signal[F]
   }
 
+  final case class RetriesFailure(e: Throwable) extends Throwable {
+    override def getCause: Throwable = e
+  }
+
   /** Keep track of download items. */
   final case class Item[F[_]](
       summary: BlockSummary,
@@ -349,15 +353,11 @@ class DownloadManagerImpl[F[_]: Concurrent: Log: Timer: Metrics](
     def downloadWithRetries(summary: BlockSummary, source: Node, relay: Boolean): F[Unit] = {
       val downloadEffect = tryDownload(summary, source, relay)
 
-      def loop(counter: Int): F[Unit] =
-        downloadEffect.handleErrorWith {
-          case NonFatal(ex) if counter > retriesConf.maxRetries.toInt =>
-            // Let's just return the last error, unwrapped, so callers don't have to anticipate
-            // whether this component is going to do retries or not.
-            // Alternatively we could use `Throwable.addSupressed` to collect all of them.
-            Sync[F].raiseError[Unit](ex)
-
-          case NonFatal(ex) =>
+      def loop(counter: Int, error: Option[Throwable]): F[Unit] =
+        if (counter == retriesConf.maxRetries.toInt) {
+          Sync[F].raiseError[Unit](RetriesFailure(error.head))
+        } else {
+          downloadEffect.handleErrorWith { e =>
             val duration = retriesConf.initialBackoffPeriod *
               math.pow(retriesConf.backoffFactor, counter.toDouble)
 
@@ -369,11 +369,9 @@ class DownloadManagerImpl[F[_]: Concurrent: Log: Timer: Metrics](
                 // maybe from a different source, so let's count every time it doesn't succeed.
                 Metrics[F].incrementCounter("downloads_failed") *>
                   Log[F].warn(
-                    s"Retrying downloading of block $id, source: ${source.show}, attempt: $nextCounter, delay: $delay, error: $ex"
+                    s"Retrying downloading of block $id, source: ${source.show}, attempt: $nextCounter, delay: $delay, error: $e"
                   ) >>
-                  Timer[F].sleep(delay) >>
-                  loop(nextCounter)
-
+                  Timer[F].sleep(delay) >> loop(nextCounter, e.some)
               case _: Duration.Infinite =>
                 Sync[F].raiseError[Unit](
                   new RuntimeException(
@@ -381,9 +379,14 @@ class DownloadManagerImpl[F[_]: Concurrent: Log: Timer: Metrics](
                   )
                 )
             }
+          }
         }
 
-      if (retriesConf.maxRetries.toInt == 0) downloadEffect else loop(0)
+      if (retriesConf.maxRetries.toInt == 0) {
+        downloadEffect
+      } else {
+        loop(counter = 0, error = None)
+      }
     }
 
     // Try to download until we succeed or give up.

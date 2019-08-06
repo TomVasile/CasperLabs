@@ -1,6 +1,5 @@
 package io.casperlabs.configuration.cli
 
-import com.github.ghik.silencer.silent
 import scala.annotation.{compileTimeOnly, StaticAnnotation}
 import scala.language.experimental.macros
 import scala.reflect.macros.blackbox
@@ -42,7 +41,6 @@ class scallop extends StaticAnnotation {
 }
 
 object scallopImpl {
-  @silent("in method unapply is never used")
   def impl(c: blackbox.Context)(annottees: c.Tree*): c.Tree = {
     import c.universe._
     annottees.head match {
@@ -53,6 +51,7 @@ object scallopImpl {
         val puttingIntoMap = putIntoMap(c)(term, termName)
         optionDefinitionWithShort(c)(
           term,
+          termName,
           tpe,
           tomlType,
           default,
@@ -65,7 +64,7 @@ object scallopImpl {
         val tomlType       = tomlTypeDefinition(c)(tpe)
         val default        = defaultDefinition(c)(termName)
         val puttingIntoMap = putIntoMap(c)(term, termName)
-        optionDefinition(c)(term, tpe, tomlType, puttingIntoMap, default, descr)
+        optionDefinition(c)(term, termName, tpe, tomlType, puttingIntoMap, default, descr)
     }
   }
   private def tomlTypeDefinition(c: blackbox.Context)(tpe: c.Tree) = {
@@ -79,7 +78,7 @@ object scallopImpl {
     q"""
           val tomlType: String = classOf[$t].getSimpleName match {
             case "Path" | "String" | "Node" | "StoreType" | "FiniteDuration" => "String"
-            case "int" | "long" | "BigInt"                                   => "Integer"
+            case "int" | "long"                                              => "Integer"
             case "boolean"                                                   => "Boolean"
             case "double"                                                    => "Double"
             case other => sys.error(s"Unexpected @scallop type: $$other")
@@ -95,6 +94,7 @@ object scallopImpl {
       c: blackbox.Context
   )(
       term: c.universe.TermName,
+      termName: String,
       tpe: c.Tree,
       tomlType: c.Tree,
       puttingIntoMap: c.Tree,
@@ -114,6 +114,7 @@ object scallopImpl {
 
   private def optionDefinitionWithShort(c: blackbox.Context)(
       term: c.universe.TermName,
+      termName: String,
       tpe: c.Tree,
       tomlType: c.Tree,
       default: c.Tree,
@@ -143,6 +144,6 @@ object scallopImpl {
   /*Value is lambda because of macroses limitation generating all code wrapped into {...}*/
   private def putIntoMap(c: blackbox.Context)(term: c.universe.TermName, termName: String) = {
     import c.universe._
-    q"fields.update((this, CamelCase($termName)), () => $term.map(_.show));"
+    q"fields += ((this, CamelCase($termName)), () => $term.map(_.show));"
   }
 }

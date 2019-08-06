@@ -4,10 +4,8 @@ import cats.Monad
 import cats.data.EitherT
 import cats.effect.concurrent.Semaphore
 import cats.implicits._
-import com.github.ghik.silencer.silent
 import com.google.protobuf.ByteString
 import io.casperlabs.blockstorage.BlockDagRepresentation
-import io.casperlabs.casper
 import io.casperlabs.casper.Estimator.{BlockHash, Validator}
 import io.casperlabs.casper.MultiParentCasperRef.MultiParentCasperRef
 import io.casperlabs.casper._
@@ -27,17 +25,12 @@ import org.scalatest.{FlatSpec, Matchers}
 
 import scala.concurrent.duration._
 
-@silent("deprecated")
 class CreateBlockAPITest extends FlatSpec with Matchers with TransportLayerCasperTestNodeFactory {
   import HashSetCasperTest._
   import HashSetCasperTestNode.Effect
-  import DeriveValidation._
 
-  implicit val scheduler: Scheduler = Scheduler.fixedPool("create-block-api-test", 4)
-  implicit val metrics              = new Metrics.MetricsNOP[Task]
-  implicit val raiseValidateErr =
-    casper.validation.raiseValidateErrorThroughApplicativeError[Effect]
-  implicit val logEff = new LogStub[Effect]
+  private implicit val scheduler: Scheduler = Scheduler.fixedPool("create-block-api-test", 4)
+  implicit val metrics                      = new Metrics.MetricsNOP[Task]
 
   private val (validatorKeys, validators)                      = (1 to 4).map(_ => Ed25519.newKeyPair).unzip
   private val bonds                                            = createBonds(validators)
@@ -56,20 +49,9 @@ class CreateBlockAPITest extends FlatSpec with Matchers with TransportLayerCaspe
     val deploys = List(
       "@0!(0) | for(_ <- @0){ @1!(1) }",
       "for(_ <- @1){ @2!(2) }"
-    ).zipWithIndex.map {
-      case (deploy, nonce) =>
-        ProtoUtil
-          .basicDeploy(
-            System.currentTimeMillis(),
-            ByteString.copyFromUtf8(deploy),
-            nonce.toLong + 1
-          )
-    }
+    ).map(ProtoUtil.sourceDeploy(_, System.currentTimeMillis(), Integer.MAX_VALUE))
 
-    implicit val logEff       = new LogStub[Effect]
-    implicit val blockStore   = node.blockStore
-    implicit val safetyOracle = node.safetyOracleEff
-
+    implicit val logEff = new LogStub[Effect]
     def testProgram(blockApiLock: Semaphore[Effect])(
         implicit casperRef: MultiParentCasperRef[Effect]
     ): Effect[(DeployServiceResponse, DeployServiceResponse)] = EitherT.liftF(
@@ -84,54 +66,18 @@ class CreateBlockAPITest extends FlatSpec with Matchers with TransportLayerCaspe
       } yield (r1.right.get, r2.right.get)
     )
 
-    try {
-      val (response1, response2) = (for {
-        casperRef    <- MultiParentCasperRef.of[Effect]
-        _            <- casperRef.set(casper)
-        blockApiLock <- Semaphore[Effect](1)
-        result       <- testProgram(blockApiLock)(casperRef)
-      } yield result).value.unsafeRunSync.right.get
+    val (response1, response2) = (for {
+      casperRef    <- MultiParentCasperRef.of[Effect]
+      _            <- casperRef.set(casper)
+      blockApiLock <- Semaphore[Effect](1)
+      result       <- testProgram(blockApiLock)(casperRef)
+    } yield result).value.unsafeRunSync.right.get
 
-      response1.success shouldBe true
-      response2.success shouldBe false
-      response2.message shouldBe "Error: There is another propose in progress."
-    } finally {
-      node.tearDown()
-    }
-  }
+    response1.success shouldBe true
+    response2.success shouldBe false
+    response2.message shouldBe "Error: There is another propose in progress."
 
-  "deploy" should "reject replayed deploys" in {
-    // Create the node with low fault tolerance threshold so it finalizes the blocks as soon as they are made.
-    val node =
-      standaloneEff(genesis, transforms, validatorKeys.head, faultToleranceThreshold = -2.0f)
-
-    implicit val logEff       = new LogStub[Effect]
-    implicit val blockStore   = node.blockStore
-    implicit val safetyOracle = node.safetyOracleEff
-
-    def testProgram(blockApiLock: Semaphore[Effect])(
-        implicit casperRef: MultiParentCasperRef[Effect]
-    ): Effect[Unit] =
-      for {
-        d <- ProtoUtil.basicDeploy[Effect](1L)
-        _ <- BlockAPI.deploy[Effect](d, ignoreDeploySignature = true)
-        _ <- BlockAPI.createBlock[Effect](blockApiLock)
-        _ <- BlockAPI.deploy[Effect](d, ignoreDeploySignature = true)
-      } yield ()
-
-    try {
-      (for {
-        casperRef    <- MultiParentCasperRef.of[Effect]
-        _            <- casperRef.set(node.casperEff)
-        blockApiLock <- Semaphore[Effect](1)
-        result       <- testProgram(blockApiLock)(casperRef)
-      } yield result).value.unsafeRunSync
-    } catch {
-      case ex: io.grpc.StatusRuntimeException =>
-        ex.getMessage should include("already contains")
-    } finally {
-      node.tearDown()
-    }
+    node.tearDown()
   }
 }
 
@@ -148,7 +94,6 @@ private class SleepingMultiParentCasperImpl[F[_]: Monad: Time](underlying: Multi
   def lastFinalizedBlock: F[Block] = underlying.lastFinalizedBlock
   def fetchDependencies: F[Unit]   = underlying.fetchDependencies
   def bufferedDeploys              = underlying.bufferedDeploys
-  def faultToleranceThreshold      = underlying.faultToleranceThreshold
 
   override def createBlock: F[CreateBlockStatus] =
     for {

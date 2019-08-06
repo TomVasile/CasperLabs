@@ -21,7 +21,7 @@ import io.casperlabs.blockstorage.{
 }
 import io.casperlabs.casper.protocol.ApprovedBlock
 import io.casperlabs.casper.consensus.{Block, BlockSummary, Deploy}
-import io.casperlabs.casper.consensus.state.Key
+import io.casperlabs.ipc.Key.KeyInstance
 import io.casperlabs.ipc.Transform.TransformInstance
 import io.casperlabs.ipc.{DeployCode => _, _}
 import io.casperlabs.metrics.Metrics
@@ -132,7 +132,7 @@ object StoreBenchSuite {
   }
 
   def randomKey: Key = Key(
-    Key.Value.Hash(Key.Hash(randomHash))
+    KeyInstance.Hash(KeyHash(randomHash))
   )
 
   def randomTransform: Transform = Transform(
@@ -153,7 +153,7 @@ object StoreBenchSuite {
   def repeatedIteratorFrom[A](elems: IndexedSeq[A]): Iterator[A] =
     Iterator
       .iterate((0, elems(0))) {
-        case (n, _) =>
+        case (n, e) =>
           val next = (n + 1) % elems.length
           (next, elems(next))
       }

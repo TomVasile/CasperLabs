@@ -47,4 +47,3 @@ services:
       - cl-||TAG||-10
     environment:
       - TAG_NAME=${TAG_NAME}
-      - TEST_RUN_ARGS=${TEST_RUN_ARGS}

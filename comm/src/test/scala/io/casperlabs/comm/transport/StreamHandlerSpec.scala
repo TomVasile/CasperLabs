@@ -3,7 +3,6 @@ package io.casperlabs.comm.transport
 import java.nio.file._
 import java.util.UUID
 
-import com.github.ghik.silencer.silent
 import com.google.protobuf.ByteString
 import io.casperlabs.catscontrib.TaskContrib._
 import io.casperlabs.catscontrib.ski._
@@ -18,7 +17,6 @@ import org.scalatest._
 
 import scala.util.Random
 
-@silent()
 class StreamHandlerSpec extends FunSpec with Matchers with BeforeAndAfterEach {
 
   implicit val log = new Log.NOPLog[Task]()

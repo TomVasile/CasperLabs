@@ -17,6 +17,8 @@ trait MonadTransTests[MT[_[_], _]] extends Laws {
       ArbGA: Arbitrary[G[A]],
       ArbGB: Arbitrary[G[B]],
       CogenA: Cogen[A],
+      EqGA: Eq[G[A]],
+      EqGB: Eq[G[B]],
       EqMTGA: Eq[MT[G, A]],
       EqMTGB: Eq[MT[G, B]]
   ): RuleSet =

@@ -49,83 +49,19 @@ Feature: Consensus
       # Confirm that the contract is not in the global state
       # Check the account balance that funded the deployment and confirm that no funds were deducted for the deployment (it was not finalized)
 
-  # Implemented test_bonding.py : test_bonding
-  Scenario: Bonding a validator node to an existing single node network
-    Given: Single  Node Network
-     And: A bonded Validator.
-     When: New node joins.
-     And: Deploys bonding request.
-     And: That bonding request is valid.
-     Then: New node becomes bonded.
-     And: Starting from new block new node can be found in bonded validators set.
-
-  # Implemented test_bonding.py : test_double_bonding
-  Scenario: Bonding a validator node twice to an existing single node network
-    Given: Single  Node Network
-     And: A bonded Validator.
-     When: New node joins.
-     And: Deploys bonding request.
-     And: That bonding request is valid.
-     Then: New node becomes bonded.
-     And: Deploys bonding request again with same stake.
-     And: That bonding request is valid.
-     Then: Bonded stake of Node becomes twice.
-     And: Starting from new block new node can be found in bonded validators set.
-
-  # Implemented test_bonding.py : test_invalid_bonding
-  Scenario: Bonding a validator node to an existing single node network
-    Given: Single  Node Network
-     And: A bonded Validator.
-     When: New node joins.
-     And: Deploys bonding request with bonding amount greater than 1000 times of the total of the current staked amount .
-     And: That bonding request is invalid.
-     Then: New node is not bonded.
-     And: Starting from new block new node cannot be found in bonded validators set.
-
-  # Implemented test_bonding.py : test_unbonding
-  Scenario: Unbonding a bonded validator node from an existing network.
-    Given: Single  Node Network
-     And: A bonded Validator.
-     When: New node joins.
-     And: Deploys bonding request.
-     And: That bonding request is valid.
-     Then: New node becomes bonded.
-     And: Starting from new block new node can be found in bonded validators set.
-     And: Deploys unbonding request.
-     Then: Node becomes unbonded from network.
-     And: Starting from new block new node cannot be found in bonded validators set.
-
-  # Implemented test_bonding.py : test_partial_unbonding
-  Scenario: Unbonding a bonded validator node with partial bonding amount from an existing network.
-    Given: Single  Node Network
-     And: A bonded Validator.
-     When: New node joins.
-     And: Deploys bonding request.
-     And: That bonding request is valid.
-     Then: New node becomes bonded.
-     And: Starting from new block new node can be found in bonded validators set.
-     And: Deploys unbonding request with partial amount of bonded amount.
-     Then: Node still bonded to the network but with reduced stake.
-     And: Starting from new block new node cannot be found in bonded validators set.
-
-  # Implemented test_bonding.py : test_invalid_unbonding
-  Scenario: Unbonding a bonded validator node from an existing network.
-    Given: Single  Node Network
-     And: A bonded Validator.
-     When: New node joins.
-     And: Deploys bonding request.
-     And: That bonding request is valid.
-     Then: New node becomes bonded.
-     And: Starting from new block new node can be found in bonded validators set.
-     And: Deploys unbonding request with amount greater than 90% of the total current staked amount.
-     Then: Node still is bonded in network.
-     And: Starting from new block new node can be found in bonded validators set.
-
-  # Implemented test_bonding.py : test_unbonding_without_bonding
-  Scenario: Unbonding a validator node which was not bonded to an existing network.
-    Given: Single  Node Network
-     And: A bonded Validator.
-     When: New node joins the network.
-     And: Deploys unbonding request.
-     Then: Node still is not unbonded since it didn't bond to network.
-     And: Starting from new block new node cannot be found in bonded validators set.
+  # Not Implemented
+  Scenario: Bonding
+     Given: 3 Node Network
+      # TODO: Convert into steps
+      # Create blocks / state on the network (create some deployments & propose blocks from a single validator)
+      # Let the blocks propagate through the network
+      # Spin up a new node
+      # Join the network
+      # Observe the node catch up on state
+      # Send a bonding deployment to one of the other nodes using a client
+      # Observe the block # containing the bonding request
+      # Send a deploy to the newly bonded validator
+      # Propose via the newly bonded validator
+      # Observe the block # proposed
+      # Observe that the block is validated by other nodes.
+      # Observe that the deployed contract is in the state of the other nodes in the network.

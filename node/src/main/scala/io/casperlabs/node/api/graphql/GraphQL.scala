@@ -4,21 +4,19 @@ import cats.effect._
 import cats.effect.concurrent.Deferred
 import cats.effect.implicits._
 import cats.implicits._
-import fs2.concurrent.Queue
-import fs2.{Pipe, Stream}
 import io.casperlabs.blockstorage.BlockStore
 import io.casperlabs.casper.MultiParentCasperRef.MultiParentCasperRef
-import io.casperlabs.casper.FinalityDetector
+import io.casperlabs.casper.SafetyOracle
 import io.casperlabs.catscontrib.MonadThrowable
 import io.casperlabs.node.api.graphql.GraphQLQuery._
 import io.casperlabs.node.api.graphql.ProtocolState.Subscriptions
 import io.casperlabs.node.api.graphql.circe._
-import io.casperlabs.node.api.graphql.schema.GraphQLSchemaBuilder
 import io.casperlabs.shared.{Log, LogSource}
-import io.casperlabs.smartcontracts.ExecutionEngineService
 import io.circe.parser.parse
 import io.circe.syntax._
 import io.circe.{Json, JsonObject}
+import fs2._
+import fs2.concurrent.Queue
 import org.http4s.circe._
 import org.http4s.server.websocket.WebSocketBuilder
 import org.http4s.websocket.WebSocketFrame
@@ -40,15 +38,13 @@ object GraphQL {
   private implicit val logSource: LogSource = LogSource(getClass)
 
   /* Entry point */
-  def service[F[_]: ConcurrentEffect: ContextShift: Timer: Log: MultiParentCasperRef: FinalityDetector: BlockStore: FinalizedBlocksStream: ExecutionEngineService](
+  def service[F[_]: ConcurrentEffect: ContextShift: Timer: Log: MultiParentCasperRef: SafetyOracle: BlockStore](
       executionContext: ExecutionContext
   ): HttpRoutes[F] = {
-    import io.casperlabs.node.api.graphql.RunToFuture.fromEffect
     implicit val ec: ExecutionContext                            = executionContext
     implicit val fs2SubscriptionStream: Fs2SubscriptionStream[F] = new Fs2SubscriptionStream[F]()
-    val schemaBuilder                                            = new GraphQLSchemaBuilder[F]
     buildRoute(
-      executor = Executor(schemaBuilder.createSchema),
+      executor = Executor(GraphQLSchema.createSchema),
       keepAlivePeriod = 10.seconds,
       ec
     )
@@ -176,12 +172,13 @@ object GraphQL {
                       .toList
                       .void
                       .start
-          } yield (
-            ProtocolState.Active[F](
-              activeSubscriptions.asInstanceOf[Subscriptions[F]] + (id -> fiber)
-            ),
-            ()
-          )
+          } yield
+            (
+              ProtocolState.Active[F](
+                activeSubscriptions.asInstanceOf[Subscriptions[F]] + (id -> fiber)
+              ),
+              ()
+            )
 
         case (ProtocolState.Active(activeSubscriptions), GraphQLWebSocketMessage.Stop(id)) =>
           for {
@@ -189,10 +186,8 @@ object GraphQL {
                   .asInstanceOf[Subscriptions[F]]
                   .get(id)
                   .fold(().pure[F])(_.cancel)
-          } yield (
-            ProtocolState.Active(activeSubscriptions.asInstanceOf[Subscriptions[F]] - id),
-            ()
-          )
+          } yield
+            (ProtocolState.Active(activeSubscriptions.asInstanceOf[Subscriptions[F]] - id), ())
 
         case (
             ProtocolState.Active(activeSubscriptions),

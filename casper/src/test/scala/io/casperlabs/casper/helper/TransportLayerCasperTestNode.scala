@@ -8,17 +8,16 @@ import cats.effect.{Concurrent, Timer}
 import cats.implicits._
 import cats.temp.par.Par
 import io.casperlabs.blockstorage._
-import io.casperlabs.casper
 import io.casperlabs.casper._
-import io.casperlabs.casper.consensus._
 import io.casperlabs.casper.protocol.{ApprovedBlock, ApprovedBlockCandidate}
+import io.casperlabs.casper.consensus._
+import io.casperlabs.casper.util.ProtoUtil
 import io.casperlabs.casper.util.comm.CasperPacketHandler.{
   ApprovedBlockReceivedHandler,
   CasperPacketHandlerImpl,
   CasperPacketHandlerInternal
 }
 import io.casperlabs.casper.util.comm.TransportLayerTestImpl
-import io.casperlabs.casper.validation.ValidationImpl
 import io.casperlabs.catscontrib.ski._
 import io.casperlabs.comm.CommError.ErrorHandler
 import io.casperlabs.comm.discovery.Node
@@ -46,9 +45,7 @@ class TransportLayerCasperTestNode[F[_]](
     blockStoreDir: Path,
     blockProcessingLock: Semaphore[F],
     faultToleranceThreshold: Float = 0f,
-    chainId: String = "casperlabs",
-    validateNonces: Boolean = true,
-    maybeMakeEE: Option[HashSetCasperTestNode.MakeExecutionEngineService[F]] = None
+    chainId: String = "casperlabs"
 )(
     implicit
     concurrentF: Concurrent[F],
@@ -63,17 +60,14 @@ class TransportLayerCasperTestNode[F[_]](
       sk,
       genesis,
       blockDagDir,
-      blockStoreDir,
-      validateNonces,
-      maybeMakeEE
+      blockStoreDir
     )(concurrentF, blockStore, blockDagStorage, metricEff, casperState) {
 
   implicit val logEff: LogStub[F] = new LogStub[F](local.host, printEnabled = false)
   implicit val connectionsCell    = Cell.unsafe[F, Connections](Connect.Connections.empty)
   implicit val transportLayerEff  = tle
+  implicit val cliqueOracleEffect = SafetyOracle.cliqueOracle[F]
   implicit val rpConfAsk          = createRPConfAsk[F](local)
-
-  implicit val safetyOracleEff: FinalityDetector[F] = new FinalityDetectorInstancesImpl[F]
 
   val defaultTimeout = FiniteDuration(1000, MILLISECONDS)
 
@@ -83,12 +77,6 @@ class TransportLayerCasperTestNode[F[_]](
 
   implicit val labF =
     LastApprovedBlock.unsafe[F](Some(ApprovedBlockWithTransforms(approvedBlock, transforms)))
-
-  implicit val raiseInvalidBlock = casper.validation.raiseValidateErrorThroughApplicativeError[F]
-  implicit val validation        = new ValidationImpl[F]
-
-  implicit val lastFinalizedBlockHashContainer =
-    NoOpsLastFinalizedBlockHashContainer.create[F](genesis.blockHash)
 
   implicit val casperEff: MultiParentCasperImpl[F] =
     new MultiParentCasperImpl[F](
@@ -181,9 +169,7 @@ trait TransportLayerCasperTestNodeFactory extends HashSetCasperTestNodeFactory {
       genesis: Block,
       transforms: Seq[TransformEntry],
       storageSize: Long = 1024L * 1024 * 10,
-      faultToleranceThreshold: Float = 0f,
-      validateNonces: Boolean = true,
-      maybeMakeEE: Option[HashSetCasperTestNode.MakeExecutionEngineService[F]] = None
+      faultToleranceThreshold: Float = 0f
   )(
       implicit errorHandler: ErrorHandler[F],
       concurrentF: Concurrent[F],
@@ -225,9 +211,7 @@ trait TransportLayerCasperTestNodeFactory extends HashSetCasperTestNodeFactory {
                     blockDagDir,
                     blockStoreDir,
                     semaphore,
-                    faultToleranceThreshold,
-                    validateNonces = validateNonces,
-                    maybeMakeEE = maybeMakeEE
+                    faultToleranceThreshold
                   )(
                     concurrentF,
                     blockStore,
