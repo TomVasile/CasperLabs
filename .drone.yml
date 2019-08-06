@@ -281,6 +281,9 @@ steps:
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock	
+    path: "/var/run/docker.sock"
   when:
     branch:
     - dev
