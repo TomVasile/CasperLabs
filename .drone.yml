@@ -16,25 +16,6 @@
 #    - "/var/cache/cl-build/.ivy2:/root/.ivy2"
 
 # Begin
-#clone:
-#  git-clone:
-#    commands: |
-#      set -ex
-#      git clone -b ${DRONE_TAG:-$DRONE_BRANCH} $DRONE_REMOTE_URL .
-#      if [ x$DRONE_PULL_REQUEST != x ]; then
-#          git fetch origin refs/pull/$DRONE_PULL_REQUEST/head
-#          EMAIL=ci git merge --no-edit FETCH_HEAD
-#      fi
-#      git rev-parse HEAD
-#    image: "casperlabs/buildenv:latest"
-
-#NOTE: 1. Had to remove cached .sbt/.ivy2 dirs for drone autoscaling. This is because
-# drone uses docker bind mounts which do not create the host dir if it is nonexistent,
-# resulting in Error response from daemon: invalid mount config for type "bind":
-# bind source path does not exist: /var/cache/cl-build/.sbt
-kind: pipeline
-name: run
-
 clone:
   git-clone:
     commands: |
@@ -46,6 +27,13 @@ clone:
       fi
       git rev-parse HEAD
     image: "casperlabs/buildenv:latest"
+
+#NOTE: 1. Had to remove cached .sbt/.ivy2 dirs for drone autoscaling. This is because
+# drone uses docker bind mounts which do not create the host dir if it is nonexistent,
+# resulting in Error response from daemon: invalid mount config for type "bind":
+# bind source path does not exist: /var/cache/cl-build/.sbt
+kind: pipeline
+name: run
 
 steps:
 # Below is for pull_request webhooks only
@@ -79,6 +67,9 @@ trigger:
 ---
 kind: pipeline
 name: cleanup
+
+clone:
+  disable: true
 
 steps:
 - name: cleanup-docker-images
@@ -115,6 +106,9 @@ depends_on:
 ---
 kind: pipeline
 name: notify
+
+clone:
+  disable: true
 
 steps:
 - name: notify
