@@ -84,22 +84,6 @@ steps:
     - failure
     - success
 
-- name: notify
-  image: plugins/slack
-  settings:
-    webhook:
-      from_secret: slack_webhook
-    channel: alerts
-    template: 
-    - |
-      *{{ uppercasefirst build.status }}*
-      Author: {{ build.author }}
-      Drone Build: <{{ build.link }}|#{{ build.number }}>
-      Commit Link: <https://github.com/{{repo.owner}}/{{repo.name}}/commit/{{build.commit}}|{{ truncate build.commit 10 }}>
-  when:
-    status:
-    - failure
-
 volumes:
 - name: docker_sock
   host:
@@ -112,6 +96,46 @@ trigger:
   status:
   - failure
   - success
+  branch:
+  - dev
+  - master
+  - "release-*"
+  - "testing*"
+  - trying
+  - staging
+
+depends_on:
+- run
+
+---
+kind: pipeline
+name: notify
+
+steps:
+- name: notify
+  image: plugins/slack
+  settings:
+    webhook:
+      from_secret: slack_webhook
+    channel: alerts
+    template: 
+    - |
+      *{{ uppercasefirst build.status }}*
+      Author: {{ build.author }}
+      Drone Build: <{{ build.link }}|#{{ build.number }}>
+      Commit Link: <https://github.com/{{repo.owner}}/{{repo.name}}/commit/{{build.commit}}|{{ truncate build.commit 10 }}>
+
+volumes:
+- name: docker_sock
+  host:
+    path: "/var/run/docker.sock"
+- name: temp
+  host:
+    path: "/tmp"
+
+trigger:
+  status:
+  - failure
   branch:
   - dev
   - master
