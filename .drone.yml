@@ -27,7 +27,7 @@ kind: pipeline
 name: clone
 
 steps:
-- name: clone
+- name: clone-repo
   git-clone:
     commands: |
       set -ex
