@@ -111,6 +111,14 @@ volumes:
 trigger:
   status:
   - failure
+  - success
+  branch:
+  - dev
+  - master
+  - "release-*"
+  - "testing*"
+  - trying
+  - staging
 
 depends_on:
 - run
