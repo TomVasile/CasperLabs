@@ -98,13 +98,7 @@ trigger:
   status:
   - failure
   - success
-  branch:
-  - dev
-  - master
-  - "release-*"
-  - "testing*"
-  - trying
-  - staging
+  <<: *pr_trigger
 
 depends_on:
 - run
