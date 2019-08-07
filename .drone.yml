@@ -23,10 +23,6 @@
 # resulting in Error response from daemon: invalid mount config for type "bind":
 # bind source path does not exist: /var/cache/cl-build/.sbt
 
----
-kind: pipeline
-name: run
-
 clone:
   git-clone:
     commands: |
@@ -38,6 +34,10 @@ clone:
       fi
       git rev-parse HEAD
     image: "casperlabs/buildenv:latest"
+
+---
+kind: pipeline
+name: run
 
 steps:
 # Below is for pull_request webhooks only
