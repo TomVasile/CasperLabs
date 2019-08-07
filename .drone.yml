@@ -66,7 +66,9 @@ trigger:
 
 ---
 kind: pipeline
-name: cleanup
+name: cleanup-pipe
+
+steps:
 - name: cleanup
   commands:
   - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
