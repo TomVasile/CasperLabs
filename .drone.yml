@@ -1,5 +1,3 @@
----
-
 aliases-deployment-triggers:
   # Trigger Alias for PR
   - &pr_trigger
@@ -11,6 +9,7 @@ aliases-deployment-triggers:
     - trying
     - staging
 
+---
 # Begin
 clone:
   git-clone:
