@@ -668,23 +668,9 @@ steps:
   when:
     ref:
     - refs/tags/v*
-
-- name: cleanup-tag
-  commands:
-  - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
-  - "docker images | grep \"DRONE-${DRONE_BUILD_NUMBER}\" | awk '{print $3}' | xargs --no-run-if-empty docker rmi -f || true"
-  environment:
-  _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock
-    path: "/var/run/docker.sock"
-  when:
-    ref:
-    - refs/tags/v*
-    status:
-    - failure
-    - success
+  depends_on:
+  - package-sbt-artifacts-tag
+  - package-ee-tag
 
 volumes:
 - name: docker_sock
