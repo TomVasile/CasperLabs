@@ -39,7 +39,7 @@ steps:
 # Below is for pull_request webhooks only
 - name: sbt-compile-test-pr
   commands:
-  - "exit 1"
+  - "exit 0"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
@@ -66,10 +66,10 @@ trigger:
 
 ---
 kind: pipeline
-name: cleanup-pipe
+name: cleanup
 
 steps:
-- name: cleanup
+- name: cleanup-docker-images
   commands:
   - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
   - "docker images | grep \"DRONE-${DRONE_BUILD_NUMBER}\" | awk '{print $3}' | xargs --no-run-if-empty docker rmi -f || true"
