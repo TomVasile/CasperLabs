@@ -124,11 +124,6 @@ steps:
       Drone Build: <{{ build.link }}|#{{ build.number }}>
       Commit Link: <https://github.com/{{repo.owner}}/{{repo.name}}/commit/{{build.commit}}|{{ truncate build.commit 10 }}>
 
-volumes:
-- name: docker_sock
-  host:
-    path: "/var/run/docker.sock"
-
 trigger:
   status:
   - failure
