@@ -1,19 +1,15 @@
 ---
 
-#NOTE: Leaving these here to try again eventually. The Yaml library drone 1.1.0
-# uses has a bug with how it handles these anchors. Workaround is to be more
-# verbose in the steps.
-#
-#__buildenv:
-#  image: "casperlabs/buildenv:latest"
-#
-#__sbtenv:
-#  environment:
-#    - "_JAVA_OPTIONS=-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-#  image: "casperlabs/buildenv:latest"
-#  volumes:
-#    - "/var/cache/cl-build/.sbt:/root/.sbt"
-#    - "/var/cache/cl-build/.ivy2:/root/.ivy2"
+aliases-deployment-triggers:
+  # Trigger Alias for PR
+  - &pr_trigger
+    branch:
+    - dev
+    - master
+    - "release-*"
+    - "testing*"
+    - trying
+    - staging
 
 # Begin
 clone:
@@ -56,13 +52,7 @@ volumes:
     path: "/tmp"
 
 trigger:
-  branch:
-  - dev
-  - master
-  - "release-*"
-  - "testing*"
-  - trying
-  - staging
+  <<: *pr_trigger
 
 ---
 kind: pipeline
