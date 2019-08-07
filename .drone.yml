@@ -16,13 +16,6 @@
 #    - "/var/cache/cl-build/.ivy2:/root/.ivy2"
 
 # Begin
-
-
-#NOTE: 1. Had to remove cached .sbt/.ivy2 dirs for drone autoscaling. This is because
-# drone uses docker bind mounts which do not create the host dir if it is nonexistent,
-# resulting in Error response from daemon: invalid mount config for type "bind":
-# bind source path does not exist: /var/cache/cl-build/.sbt
-
 clone:
   git-clone:
     commands: |
@@ -35,7 +28,10 @@ clone:
       git rev-parse HEAD
     image: "casperlabs/buildenv:latest"
 
----
+#NOTE: 1. Had to remove cached .sbt/.ivy2 dirs for drone autoscaling. This is because
+# drone uses docker bind mounts which do not create the host dir if it is nonexistent,
+# resulting in Error response from daemon: invalid mount config for type "bind":
+# bind source path does not exist: /var/cache/cl-build/.sbt
 kind: pipeline
 name: run
 
