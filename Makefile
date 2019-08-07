@@ -83,7 +83,7 @@ cargo-package-all: \
 
 # Drone is already running commands in the `builderenv`, no need to delegate.
 cargo-native-packager/%:
-	if [ -z "${DRONE_BRANCH}" ]; then \
+	if [ -z "${DRONE}" ]; then \
 		$(MAKE) .make/cargo-docker-packager/$* ; \
 	else \
 		$(MAKE) .make/cargo-native-packager/$* ; \
