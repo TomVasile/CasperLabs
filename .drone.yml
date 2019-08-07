@@ -109,13 +109,8 @@ volumes:
     path: "/tmp"
 
 trigger:
-  branch:
-  - dev
-  - master
-  - "release-*"
-  - "testing*"
-  - trying
-  - staging
+  status:
+  - failure
 
 depends_on:
 - run
