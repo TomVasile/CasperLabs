@@ -63,6 +63,7 @@ steps:
   environment:
     CARGO_FLAGS: "--locked"
   commands:
+  - exit 1
   - "cd execution-engine/"
   - "rustup target add --toolchain $(cat rust-toolchain) wasm32-unknown-unknown"
   - "make test test-contracts"
@@ -545,7 +546,7 @@ trigger:
 
 ---
 kind: pipeline
-name: cleanup-notify
+name: cleanup
 
 clone:
   disable: true
@@ -585,6 +586,9 @@ depends_on:
 ---
 kind: pipeline
 name: failed-build-alert
+
+clone:
+  disable: true
 
 steps:
 - name: notify
