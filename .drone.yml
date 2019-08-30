@@ -45,7 +45,7 @@ steps:
   image: "casperlabs/buildenv:latest"
   when:
     changeset:
-      includes: [ **/**.scala ]
+      includes: [ **/*.scala ]
     event:
     - pull_request
 
