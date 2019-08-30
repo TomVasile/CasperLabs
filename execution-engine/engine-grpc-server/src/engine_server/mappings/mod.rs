@@ -5,18 +5,19 @@ use std::string::ToString;
 
 use protobuf::ProtobufEnum;
 
+use crate::engine_server::{ipc, state};
 use contract_ffi::uref::URef;
 use contract_ffi::value::account::{
     AccountActivity, ActionThresholds, AssociatedKeys, BlockTime, PublicKey, PurseId, Weight,
 };
 use contract_ffi::value::U512;
 use engine_core::engine_state::error::{Error as EngineError, RootNotFound};
+use engine_core::engine_state::executable_deploy_item::ExecutableDeployItem;
 use engine_core::engine_state::execution_effect::ExecutionEffect;
 use engine_core::engine_state::execution_result::ExecutionResult;
 use engine_core::engine_state::op::Op;
 use engine_core::execution::Error as ExecutionError;
-use engine_core::utils;
-use engine_server::{ipc, state};
+use engine_core::tracking_copy::utils;
 use engine_shared::logging;
 use engine_shared::logging::log_level;
 use engine_shared::newtypes::Blake2bHash;
@@ -579,7 +580,8 @@ impl From<Op> for super::ipc::Op {
     }
 }
 
-// Newtype wrapper as rustc requires because trait impl have to be defined in the crate of the type.
+// Newtype wrapper as rustc requires because trait impl have to be defined in
+// the crate of the type.
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct CommitTransforms(HashMap<contract_ffi::key::Key, transform::Transform>);
 
@@ -684,7 +686,7 @@ impl From<ExecutionResult> for ipc::DeployResult {
                 effect: effects,
                 cost,
             } => {
-                let mut ipc_ee = effects.into();
+                let ipc_ee = effects.into();
                 let mut deploy_result = ipc::DeployResult::new();
                 let mut execution_result = ipc::DeployResult_ExecutionResult::new();
                 execution_result.set_effects(ipc_ee);
@@ -701,6 +703,9 @@ impl From<ExecutionResult> for ipc::DeployResult {
                     // TODO(mateusz.gorski): Fix error model for the storage errors.
                     // We don't have separate IPC messages for storage errors
                     // so for the time being they are all reported as "wasm errors".
+                    error @ EngineError::InvalidHashLength { .. } => {
+                        precondition_failure(error.to_string())
+                    }
                     error @ EngineError::InvalidPublicKeyLength { .. } => {
                         precondition_failure(error.to_string())
                     }
@@ -710,11 +715,29 @@ impl From<ExecutionResult> for ipc::DeployResult {
                     error @ EngineError::WasmSerializationError(_) => {
                         precondition_failure(error.to_string())
                     }
+                    error @ EngineError::ExecError(
+                        ExecutionError::DeploymentAuthorizationFailure,
+                    ) => precondition_failure(error.to_string()),
                     EngineError::StorageError(storage_err) => {
                         execution_error(storage_err.to_string(), cost, effect)
                     }
                     error @ EngineError::AuthorizationError => {
                         precondition_failure(error.to_string())
+                    }
+                    EngineError::MissingSystemContractError(msg) => {
+                        execution_error(msg, cost, effect)
+                    }
+                    error @ EngineError::InsufficientPaymentError => {
+                        let msg = error.to_string();
+                        execution_error(msg, cost, effect)
+                    }
+                    error @ EngineError::DeployError => {
+                        let msg = error.to_string();
+                        execution_error(msg, cost, effect)
+                    }
+                    error @ EngineError::FinalizationError => {
+                        let msg = error.to_string();
+                        execution_error(msg, cost, effect)
                     }
                     EngineError::ExecError(exec_error) => match exec_error {
                         ExecutionError::GasLimit => {
@@ -743,8 +766,9 @@ impl From<ExecutionResult> for ipc::DeployResult {
                             deploy_nonce,
                             expected_nonce,
                         } if deploy_nonce <= expected_nonce => {
-                            // Deploys with nonce lower than (or equal to) current account's nonce will always fail.
-                            // They won't be repeated so we treat them as precondition failures.
+                            // Deploys with nonce lower than (or equal to) current account's nonce
+                            // will always fail. They won't be repeated
+                            // so we treat them as precondition failures.
                             let error_msg = format!("Deploy nonce: {:?} was lower (or equal to) than expected nonce {:?}", deploy_nonce, expected_nonce);
                             precondition_failure(error_msg)
                         }
@@ -764,10 +788,13 @@ impl From<ExecutionResult> for ipc::DeployResult {
                             execution_error(error_msg, cost, effect)
                         }
                         ExecutionError::Interpreter(error) => {
-                            // If the error happens during contract execution it's mapped to HostError
-                            // and wrapped in Interpreter error, so we may end up with InterpreterError(HostError(InterpreterError))).
-                            // In order to provide clear error messages we have to downcast and match on the inner error,
-                            // otherwise we end up with `Host(Trap(Trap(TrapKind:InterpreterError)))`.
+                            // If the error happens during contract execution it's mapped to
+                            // HostError and wrapped in Interpreter
+                            // error, so we may end up with
+                            // InterpreterError(HostError(InterpreterError))).
+                            // In order to provide clear error messages we have to downcast and
+                            // match on the inner error, otherwise we
+                            // end up with `Host(Trap(Trap(TrapKind:InterpreterError)))`.
                             // TODO: This really should be happening in the `Executor::exec`.
                             match error.as_host_error() {
                                 Some(host_error) => {
@@ -870,7 +897,39 @@ where
     }
 }
 
-/// Constructs an instance of [[ipc::DeployResult]] with an error set to [[ipc::DeployError_PreconditionFailure]].
+impl From<ipc::DeployPayload_oneof_payload> for ExecutableDeployItem {
+    fn from(deploy_payload: ipc::DeployPayload_oneof_payload) -> Self {
+        match deploy_payload {
+            ipc::DeployPayload_oneof_payload::deploy_code(deploy_code) => {
+                ExecutableDeployItem::ModuleBytes {
+                    module_bytes: deploy_code.code,
+                    args: deploy_code.args,
+                }
+            }
+            ipc::DeployPayload_oneof_payload::stored_contract_hash(stored_contract_hash) => {
+                ExecutableDeployItem::StoredContractByHash {
+                    hash: stored_contract_hash.hash,
+                    args: stored_contract_hash.args,
+                }
+            }
+            ipc::DeployPayload_oneof_payload::stored_contract_name(stored_contract_name) => {
+                ExecutableDeployItem::StoredContractByName {
+                    name: stored_contract_name.stored_contract_name,
+                    args: stored_contract_name.args,
+                }
+            }
+            ipc::DeployPayload_oneof_payload::stored_contract_uref(stored_contract_uref) => {
+                ExecutableDeployItem::StoredContractByURef {
+                    uref: stored_contract_uref.uref,
+                    args: stored_contract_uref.args,
+                }
+            }
+        }
+    }
+}
+
+/// Constructs an instance of [[ipc::DeployResult]] with an error set to
+/// [[ipc::DeployError_PreconditionFailure]].
 fn precondition_failure(msg: String) -> ipc::DeployResult {
     let mut deploy_result = ipc::DeployResult::new();
     let mut precondition_failure = ipc::DeployResult_PreconditionFailure::new();
@@ -879,7 +938,8 @@ fn precondition_failure(msg: String) -> ipc::DeployResult {
     deploy_result
 }
 
-/// Constructs an instance of [[ipc::DeployResult]] with error set to [[ipc::DeployError_ExecutionError]].
+/// Constructs an instance of [[ipc::DeployResult]] with error set to
+/// [[ipc::DeployError_ExecutionError]].
 fn execution_error(msg: String, cost: u64, effect: ExecutionEffect) -> ipc::DeployResult {
     let mut deploy_result = ipc::DeployResult::new();
     let deploy_error = {
@@ -919,6 +979,7 @@ mod tests {
 
     use proptest::prelude::*;
 
+    use crate::engine_server::mappings::CommitTransforms;
     use contract_ffi::gens::{account_arb, contract_arb, key_arb, uref_map_arb, value_arb};
     use contract_ffi::key::Key;
     use contract_ffi::uref::{AccessRights, URef};
@@ -927,7 +988,6 @@ mod tests {
     use engine_core::engine_state::execution_effect::ExecutionEffect;
     use engine_core::engine_state::execution_result::ExecutionResult;
     use engine_core::execution::Error;
-    use engine_server::mappings::CommitTransforms;
     use engine_shared::newtypes::Blake2bHash;
     use engine_shared::transform::gens::transform_arb;
     use engine_shared::transform::Transform;
@@ -936,7 +996,8 @@ mod tests {
     use super::ipc;
     use super::state;
 
-    // Test that wasm_error function actually returns DeployResult with result set to WasmError
+    // Test that wasm_error function actually returns DeployResult with result set
+    // to WasmError
     #[test]
     fn wasm_error_result() {
         let error_msg = "ExecError";

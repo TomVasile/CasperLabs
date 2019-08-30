@@ -1,4 +1,4 @@
-#![feature(result_map_or_else, never_type, duration_float)]
+#![feature(result_map_or_else, never_type)]
 
 extern crate blake2;
 extern crate chrono;
@@ -11,7 +11,6 @@ extern crate log;
 extern crate num;
 extern crate parity_wasm;
 
-pub mod init;
 #[macro_use]
 pub mod logging;
 pub mod newtypes;

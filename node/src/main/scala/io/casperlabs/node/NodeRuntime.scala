@@ -6,7 +6,7 @@ import cats._
 import cats.data._
 import cats.effect._
 import cats.effect.concurrent.{Ref, Semaphore}
-import cats.mtl.{FunctorRaise, MonadState}
+import cats.mtl.FunctorRaise
 import cats.syntax.applicative._
 import cats.syntax.apply._
 import cats.syntax.flatMap._
@@ -14,17 +14,23 @@ import cats.syntax.functor._
 import cats.syntax.show._
 import cats.temp.par.Par
 import com.olegpy.meow.effects._
+import doobie.util.transactor.Transactor
 import io.casperlabs.blockstorage.util.fileIO.IOError
 import io.casperlabs.blockstorage.util.fileIO.IOError.RaiseIOError
 import io.casperlabs.blockstorage.{
-  BlockDagFileStorage,
-  BlockDagStorage,
-  BlockStore,
-  CachingBlockStore,
-  FileLMDBIndexBlockStore
+  BlockStorage,
+  CachingBlockStorage,
+  DagStorage,
+  FileDagStorage,
+  FileLMDBIndexBlockStorage
 }
 import io.casperlabs.casper.MultiParentCasperRef.MultiParentCasperRef
 import io.casperlabs.casper._
+import io.casperlabs.casper.deploybuffer.{DeployBuffer, DeployBufferImpl}
+import io.casperlabs.casper.finality.singlesweep.{
+  FinalityDetector,
+  FinalityDetectorBySingleSweepImpl
+}
 import io.casperlabs.casper.validation.{Validation, ValidationImpl}
 import io.casperlabs.catscontrib.Catscontrib._
 import io.casperlabs.catscontrib.TaskContrib._
@@ -43,7 +49,7 @@ import io.casperlabs.node.configuration.Configuration
 import io.casperlabs.shared._
 import io.casperlabs.smartcontracts.{ExecutionEngineService, GrpcExecutionEngineService}
 import io.netty.handler.ssl.ClientAuth
-import monix.eval.{Task, TaskLike}
+import monix.eval.Task
 import monix.execution.Scheduler
 import org.flywaydb.core.Flyway
 import org.flywaydb.core.api.Location
@@ -53,12 +59,22 @@ import scala.concurrent.duration._
 class NodeRuntime private[node] (
     conf: Configuration,
     id: NodeIdentifier
-)(implicit log: Log[Task], scheduler: Scheduler) {
+)(
+    implicit log: Log[Task],
+    scheduler: Scheduler,
+    uncaughtExceptionHandler: UncaughtExceptionHandler
+) {
 
   private[this] val loopScheduler =
-    Scheduler.fixedPool("loop", 4, reporter = UncaughtExceptionHandler)
+    Scheduler.fixedPool("loop", 4, reporter = uncaughtExceptionHandler)
   private[this] val blockingScheduler =
-    Scheduler.cached("blocking-io", 4, 64, reporter = UncaughtExceptionHandler)
+    Scheduler.cached("blocking-io", 4, 64, reporter = uncaughtExceptionHandler)
+
+  private[this] val dbConnScheduler =
+    Scheduler.cached("db-conn", 1, 64, reporter = uncaughtExceptionHandler)
+  private[this] val dbIOScheduler =
+    Scheduler.cached("db-io", 1, Int.MaxValue, reporter = uncaughtExceptionHandler)
+
   private implicit val concurrentEffectForEffect: ConcurrentEffect[Effect] =
     catsConcurrentEffectForEffect(
       scheduler
@@ -67,10 +83,10 @@ class NodeRuntime private[node] (
   implicit val raiseIOError: RaiseIOError[Effect] = IOError.raiseIOErrorThroughSync[Effect]
 
   // intra-node gossiping port.
-  private val port           = conf.server.port
-  private val kademliaPort   = conf.server.kademliaPort
-  private val blockstorePath = conf.server.dataDir.resolve("blockstore")
-  private val dagStoragePath = conf.server.dataDir.resolve("dagstorage")
+  private val port             = conf.server.port
+  private val kademliaPort     = conf.server.kademliaPort
+  private val blockStoragePath = conf.server.dataDir.resolve("blockstorage")
+  private val dagStoragePath   = conf.server.dataDir.resolve("dagstorage")
 
   /**
     * Main node entry. It will:
@@ -115,7 +131,14 @@ class NodeRuntime private[node] (
                                                                               conf.grpc.socket,
                                                                               conf.server.maxMessageSize
                                                                             )
-
+        //TODO: We may want to adjust threading model for better performance
+        implicit0(doobieTransactor: Transactor[Effect]) <- effects.doobieTransactor(
+                                                            connectEC = dbConnScheduler,
+                                                            transactEC = dbIOScheduler,
+                                                            conf.server.dataDir
+                                                          )
+        implicit0(deployBuffer: DeployBuffer[Effect]) <- Resource
+                                                          .liftF(DeployBufferImpl.create[Effect])
         maybeBootstrap <- Resource.liftF(initPeer[Effect])
 
         implicit0(finalizedBlocksStream: FinalizedBlocksStream[Effect]) <- Resource.liftF(
@@ -140,42 +163,42 @@ class NodeRuntime private[node] (
                                                         )
         _ <- Resource.liftF(runRdmbsMigrations(conf.server.dataDir))
 
-        implicit0(blockStore: BlockStore[Effect]) <- FileLMDBIndexBlockStore[Effect](
-                                                      conf.server.dataDir,
-                                                      blockstorePath,
-                                                      100L * 1024L * 1024L * 4096L
+        implicit0(blockStorage: BlockStorage[Effect]) <- FileLMDBIndexBlockStorage[Effect](
+                                                          conf.server.dataDir,
+                                                          blockStoragePath,
+                                                          100L * 1024L * 1024L * 4096L
+                                                        )(
+                                                          Concurrent[Effect],
+                                                          logEff,
+                                                          raiseIOError,
+                                                          metricsEff
+                                                        ) evalMap { underlying =>
+                                                          CachingBlockStorage[Effect](
+                                                            underlying,
+                                                            maxSizeBytes =
+                                                              conf.blockstorage.cacheMaxSizeBytes
+                                                          )(
+                                                            Sync[Effect],
+                                                            metricsEff
+                                                          )
+                                                        }
+
+        implicit0(dagStorage: DagStorage[Effect]) <- FileDagStorage[Effect](
+                                                      dagStoragePath,
+                                                      conf.blockstorage.latestMessagesLogMaxSizeFactor,
+                                                      blockStorage
                                                     )(
                                                       Concurrent[Effect],
                                                       logEff,
                                                       raiseIOError,
                                                       metricsEff
-                                                    ) evalMap { underlying =>
-                                                      CachingBlockStore[Effect](
-                                                        underlying,
-                                                        maxSizeBytes =
-                                                          conf.blockstorage.cacheMaxSizeBytes
-                                                      )(
-                                                        Sync[Effect],
-                                                        metricsEff
-                                                      )
-                                                    }
-
-        implicit0(blockDagStorage: BlockDagStorage[Effect]) <- BlockDagFileStorage[Effect](
-                                                                dagStoragePath,
-                                                                conf.blockstorage.latestMessagesLogMaxSizeFactor,
-                                                                blockStore
-                                                              )(
-                                                                Concurrent[Effect],
-                                                                logEff,
-                                                                raiseIOError,
-                                                                metricsEff
-                                                              )
+                                                    )
 
         _ <- Resource.liftF {
               Task
                 .delay {
                   log.info("Cleaning block storage ...")
-                  blockStore.clear() *> blockDagStorage.clear()
+                  blockStorage.clear() *> dagStorage.clear()
                 }
                 .whenA(conf.server.cleanBlockStorage)
                 .toEffect
@@ -197,7 +220,7 @@ class NodeRuntime private[node] (
                                                                             .of[Effect]
                                                                         )
 
-        implicit0(safetyOracle: FinalityDetector[Effect]) = new FinalityDetectorInstancesImpl[
+        implicit0(safetyOracle: FinalityDetector[Effect]) = new FinalityDetectorBySingleSweepImpl[
           Effect
         ]()(
           Monad[Effect],
@@ -214,12 +237,6 @@ class NodeRuntime private[node] (
               maxInterval = conf.casper.autoProposeMaxInterval,
               maxCount = conf.casper.autoProposeMaxCount,
               blockApiLock = blockApiLock
-            )(
-              Concurrent[Effect],
-              Time[Effect],
-              logEff,
-              metricsEff,
-              multiParentCasperRef
             ).whenA(conf.casper.autoProposeEnabled)
 
         _ <- api.Servers
@@ -235,8 +252,6 @@ class NodeRuntime private[node] (
               conf.grpc.portExternal,
               conf.server.maxMessageSize,
               blockingScheduler,
-              blockApiLock,
-              conf.casper.ignoreDeploySignature,
               maybeApiSslContext
             )
 
@@ -260,13 +275,12 @@ class NodeRuntime private[node] (
                 blockingScheduler
               )
             }
-
-      } yield (nodeDiscovery, multiParentCasperRef)
+      } yield (nodeDiscovery, multiParentCasperRef, deployBuffer)
 
       resources.allocated flatMap {
-        case ((nodeDiscovery, multiParentCasperRef), release) =>
+        case ((nodeDiscovery, multiParentCasperRef, deployBuffer), release) =>
           handleUnrecoverableErrors {
-            nodeProgram(state, nodeDiscovery, multiParentCasperRef, release)
+            nodeProgram(state, nodeDiscovery, multiParentCasperRef, deployBuffer, release)
           }
       }
     })
@@ -291,6 +305,7 @@ class NodeRuntime private[node] (
       rpConfState: RPConfState[Task],
       nodeDiscovery: NodeDiscovery[Task],
       multiParentCasperRef: MultiParentCasperRef[Effect],
+      deployBuffer: DeployBuffer[Effect],
       release: Effect[Unit]
   ): Effect[Unit] = {
 
@@ -311,10 +326,30 @@ class NodeRuntime private[node] (
         _      <- time.sleep(30.seconds).toEffect
       } yield ()
 
+    val cleanupDiscardedDeploysLoop: Effect[Unit] = for {
+      _ <- deployBuffer.cleanupDiscarded(1.hour)
+      _ <- time.sleep(1.minute).toEffect
+    } yield ()
+
+    val checkPendingDeploysExpirationLoop: Effect[Unit] = for {
+      _ <- deployBuffer.markAsDiscarded(12.hours)
+      _ <- time.sleep(1.minute).toEffect
+    } yield ()
+
     for {
-      _       <- addShutdownHook(release).toEffect
-      _       <- info
-      _       <- Task.defer(fetchLoop.forever.value).executeOn(loopScheduler).start.toEffect
+      _ <- addShutdownHook(release).toEffect
+      _ <- info
+      _ <- Task.defer(fetchLoop.forever.value).executeOn(loopScheduler).start.toEffect
+      _ <- Task
+            .defer(cleanupDiscardedDeploysLoop.forever.value)
+            .executeOn(loopScheduler)
+            .start
+            .toEffect
+      _ <- Task
+            .defer(checkPendingDeploysExpirationLoop.forever.value)
+            .executeOn(loopScheduler)
+            .start
+            .toEffect
       host    <- peerNodeAsk.ask.toEffect.map(_.host)
       address = s"casperlabs://$id@$host?protocol=$port&discovery=$kademliaPort"
       _       <- Log[Effect].info(s"Listening for traffic on $address.")
@@ -331,7 +366,7 @@ class NodeRuntime private[node] (
       _ <- log.info("Goodbye.")
     } yield ()
     // Run the release synchronously so that we can see the final message.
-    task.unsafeRunSync(scheduler)
+    task.runSyncUnsafe(1.minute)
   }
 
   private def addShutdownHook(release: Effect[Unit]): Task[Unit] =
@@ -394,7 +429,11 @@ class NodeRuntime private[node] (
 object NodeRuntime {
   def apply(
       conf: Configuration
-  )(implicit scheduler: Scheduler, log: Log[Task]): Effect[NodeRuntime] =
+  )(
+      implicit scheduler: Scheduler,
+      log: Log[Task],
+      uncaughtExceptionHandler: UncaughtExceptionHandler
+  ): Effect[NodeRuntime] =
     for {
       id      <- NodeEnvironment.create(conf)
       runtime <- Task.delay(new NodeRuntime(conf, id)).toEffect

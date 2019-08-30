@@ -1,9 +1,10 @@
 package io.casperlabs.casper.util
 
 import cats.implicits._
-import cats.{Eval, Monad}
-import io.casperlabs.blockstorage.{BlockDagRepresentation, BlockMetadata, BlockStore}
+import cats.{Eq, Eval, Monad, Show}
+import io.casperlabs.blockstorage.{BlockMetadata, BlockStorage, DagRepresentation}
 import io.casperlabs.casper.Estimator.BlockHash
+import io.casperlabs.casper.PrettyPrinter
 import io.casperlabs.casper.consensus.Block
 import io.casperlabs.catscontrib.MonadThrowable
 import io.casperlabs.shared.StreamT
@@ -54,9 +55,16 @@ object DagOperations {
     StreamT.delay(Eval.now(build(Queue.empty[A].enqueue[A](start), HashSet.empty[k.K])))
   }
 
+  val blockTopoOrderingAsc: Ordering[BlockMetadata] =
+    Ordering.by[BlockMetadata, Long](_.rank).reverse
+
+  val blockTopoOrderingDesc: Ordering[BlockMetadata] = Ordering.by(_.rank)
+
   def bfToposortTraverseF[F[_]: Monad](
       start: List[BlockMetadata]
-  )(neighbours: BlockMetadata => F[List[BlockMetadata]]): StreamT[F, BlockMetadata] = {
+  )(
+      neighbours: BlockMetadata => F[List[BlockMetadata]]
+  )(implicit ord: Ordering[BlockMetadata]): StreamT[F, BlockMetadata] = {
     def build(
         q: mutable.PriorityQueue[BlockMetadata],
         prevVisited: HashSet[BlockHash]
@@ -72,9 +80,6 @@ object DagOperations {
             newQ    = q ++ ns.filterNot(b => visited(b.blockHash))
           } yield StreamT.cons(curr, Eval.always(build(newQ, visited)))
       }
-
-    implicit val blockTopoOrdering: Ordering[BlockMetadata] =
-      Ordering.by[BlockMetadata, Long](_.rank).reverse
 
     StreamT.delay(
       Eval.now(build(mutable.PriorityQueue.empty[BlockMetadata] ++ start, HashSet.empty[BlockHash]))
@@ -233,7 +238,7 @@ object DagOperations {
 
   def uncommonAncestors[F[_]: Monad](
       blocks: IndexedSeq[BlockMetadata],
-      dag: BlockDagRepresentation[F]
+      dag: DagRepresentation[F]
   )(
       implicit topoSort: Ordering[BlockMetadata]
   ): F[Map[BlockMetadata, BitSet]] = {
@@ -247,11 +252,11 @@ object DagOperations {
   //Based on that, we compute by finding the first block from genesis for which there
   //exists a child of that block which is an ancestor of b1 or b2 but not both.
   @deprecated("Use uncommonAncestors", "0.1")
-  def greatestCommonAncestorF[F[_]: MonadThrowable: BlockStore](
+  def greatestCommonAncestorF[F[_]: MonadThrowable: BlockStorage](
       b1: Block,
       b2: Block,
       genesis: Block,
-      dag: BlockDagRepresentation[F]
+      dag: DagRepresentation[F]
   ): F[Block] =
     if (b1 == b2) {
       b1.pure[F]
@@ -284,4 +289,111 @@ object DagOperations {
               )
       } yield gca.get
     }
+
+  private def missingDependencyError[A: Show](a: A): Throwable =
+    new IllegalStateException(s"Missing ${Show[A].show(a)} dependency.")
+
+  /** Computes Latest Common Ancestor of two elements.
+    */
+  def latestCommonAncestorF[F[_]: MonadThrowable, A: Eq: Ordering](
+      a: A,
+      b: A
+  )(next: A => F[A]): F[A] =
+    if (Eq[A].eqv(a, b)) {
+      a.pure[F]
+    } else {
+      Ordering[A].compare(a, b) match {
+        case -1 =>
+          // Block `b` is "higher" in the chain
+          next(b).flatMap(latestCommonAncestorF(a, _)(next))
+        case 0 =>
+          // Both blocks have the same rank but they're different blocks.
+          for {
+            aa  <- next(a)
+            bb  <- next(b)
+            lca <- latestCommonAncestorF(aa, bb)(next)
+          } yield lca
+        case 1 =>
+          next(a).flatMap(latestCommonAncestorF(b, _)(next))
+      }
+    }
+
+  /** Computes Latest Common Ancestor of the set of elements.
+    */
+  def latestCommonAncestorF[F[_]: MonadThrowable, A: Eq: Ordering](
+      starters: List[A]
+  )(next: A => F[A]): F[A] =
+    starters.foldLeftM(starters.head)(latestCommonAncestorF(_, _)(next))
+
+  /** Computes Latest Common Ancestor of a set of blocks by following main-parent
+    * vertices.
+    *
+    * @param dag Representation of a DAG.
+    * @param starters Starting blocks.
+    * @tparam F Effect type.
+    * @return Latest Common Ancestor of starting blocks.
+    */
+  def latestCommonAncestorsMainParent[F[_]: MonadThrowable](
+      dag: DagRepresentation[F],
+      starters: List[BlockHash]
+  ): F[BlockHash] = {
+    implicit val blocksOrdering = DagOperations.blockTopoOrderingDesc
+    import io.casperlabs.casper.util.implicits.{eqBlockMetadata, showBlockHash}
+    def lookup[A](f: A => BlockHash): A => F[BlockMetadata] =
+      el =>
+        dag
+          .lookup(f(el))
+          .flatMap(MonadThrowable[F].fromOption(_, missingDependencyError(f(el))))
+
+    starters
+      .traverse(lookup(identity))
+      .flatMap(
+        latestCommonAncestorF[F, BlockMetadata](_)(lookup[BlockMetadata](_.parents.head)(_))
+      )
+      .map(_.blockHash)
+  }
+
+  /** Check if there's a (possibly empty) path leading from any of the starting points to any of the targets. */
+  def anyPathExists[F[_]: Monad, A](
+      start: Set[A],
+      targets: Set[A]
+  )(neighbours: A => F[List[A]])(
+      implicit k: Key[A]
+  ): F[Boolean] =
+    bfTraverseF[F, A](start.toList)(neighbours).find(targets).map(_.nonEmpty)
+
+  /** Check if a path in the p-DAG exists from ancestors to descendants (or self). */
+  def anyDescendantPathExists[F[_]: MonadThrowable](
+      dag: DagRepresentation[F],
+      ancestors: Set[BlockHash],
+      descendants: Set[BlockHash]
+  ): F[Boolean] =
+    anyPathExists(ancestors, descendants) { blockHash =>
+      dag.children(blockHash).map(_.toList)
+    }
+
+  /** Collect all block hashes from the ancestor candidates through which can reach any of the descendants. */
+  def collectWhereDescendantPathExists[F[_]: MonadThrowable](
+      dag: DagRepresentation[F],
+      ancestors: Set[BlockHash],
+      descendants: Set[BlockHash]
+  ): F[Set[BlockHash]] = {
+    // Traverse backwards rank by rank until we either visit all ancestors or go beyond the oldest.
+    implicit val ord = blockTopoOrderingDesc
+    for {
+      ancestorMeta   <- ancestors.toList.traverse(dag.lookup).map(_.flatten)
+      descendantMeta <- descendants.toList.traverse(dag.lookup).map(_.flatten)
+      minRank        = if (ancestorMeta.isEmpty) 0 else ancestorMeta.map(_.rank).min
+      reachable <- bfToposortTraverseF[F](descendantMeta) { blockMeta =>
+                    blockMeta.parents.traverse(dag.lookup).map(_.flatten)
+                  }.foldWhileLeft(Set.empty[BlockHash]) {
+                    case (reachable, blockMeta) if ancestors(blockMeta.blockHash) =>
+                      Left(reachable + blockMeta.blockHash)
+                    case (reachable, blockMeta) if blockMeta.rank >= minRank =>
+                      Left(reachable)
+                    case (reachable, _) =>
+                      Right(reachable)
+                  }
+    } yield reachable
+  }
 }

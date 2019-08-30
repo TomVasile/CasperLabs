@@ -7,14 +7,25 @@ import tempfile
 from pathlib import Path
 from typing import List, Tuple, Dict, Union, Optional
 
-from test.cl_node.casperlabsnode import extract_block_hash_from_propose_output
+from test.cl_node.common import (
+    extract_block_hash_from_propose_output,
+    MAX_PAYMENT_COST,
+    CONV_RATE,
+)
 from test.cl_node.docker_base import LoggingDockerBase
 from test.cl_node.docker_client import DockerClient
 from test.cl_node.errors import CasperLabsNodeAddressNotFoundError
-from test.cl_node.pregenerated_keypairs import PREGENERATED_KEYPAIRS
 from test.cl_node.python_client import PythonClient
 from test.cl_node.docker_base import DockerConfig
 from test.cl_node.casperlabs_accounts import is_valid_account, Account
+from test.cl_node.common import (
+    PAYMENT_CONTRACT,
+    TRANSFER_TO_ACCOUNT_CONTRACT,
+    MAX_PAYMENT_ABI,
+)
+
+
+FIRST_VALIDATOR_ACCOUNT = 100
 
 
 class DockerNode(LoggingDockerBase):
@@ -43,8 +54,8 @@ class DockerNode(LoggingDockerBase):
     DOCKER_CLIENT = "d"
     PYTHON_CLIENT = "p"
 
-    def __init__(self, cl_network, config: DockerConfig, socket_volume: str):
-        super().__init__(config, socket_volume)
+    def __init__(self, cl_network, config: DockerConfig):
+        super().__init__(config)
         self.cl_network = cl_network
         self._client = self.DOCKER_CLIENT
         self.p_client = PythonClient(self)
@@ -56,7 +67,7 @@ class DockerNode(LoggingDockerBase):
         if self.is_in_docker:
             return 0
         else:
-            return self.number * 10
+            return self.config.number * 10
 
     @property
     def grpc_external_docker_port(self) -> int:
@@ -81,10 +92,6 @@ class DockerNode(LoggingDockerBase):
         :return: int (seconds)
         """
         return self.config.command_timeout
-
-    @property
-    def number(self) -> int:
-        return self.config.number
 
     @property
     def container_type(self):
@@ -133,14 +140,17 @@ class DockerNode(LoggingDockerBase):
             f"{self.GRPC_EXTERNAL_PORT}/tcp": self.grpc_external_docker_port,
         }
 
+    @property
+    def volumes(self) -> dict:
+        return {
+            self.host_genesis_dir: {"bind": self.CL_GENESIS_DIR, "mode": "rw"},
+            self.host_bootstrap_dir: {"bind": self.CL_BOOTSTRAP_DIR, "mode": "rw"},
+            self.host_accounts_dir: {"bind": self.CL_ACCOUNTS_DIR, "mode": "rw"},
+            self.deploy_dir: {"bind": self.CL_NODE_DEPLOY_DIR, "mode": "rw"},
+            self.config.socket_volume: {"bind": self.CL_SOCKETS_DIR, "mode": "rw"},
+        }
+
     def _get_container(self):
-        env = self.config.node_env.copy()
-        env[
-            "CL_CASPER_GENESIS_ACCOUNT_PUBLIC_KEY_PATH"
-        ] = self.CL_CASPER_GENESIS_ACCOUNT_PUBLIC_KEY_PATH
-        java_options = os.environ.get("_JAVA_OPTIONS")
-        if java_options is not None:
-            env["_JAVA_OPTIONS"] = java_options
         self.deploy_dir = tempfile.mkdtemp(dir="/tmp", prefix="deploy_")
         self.create_resources_dir()
 
@@ -160,18 +170,13 @@ class DockerNode(LoggingDockerBase):
             detach=True,
             mem_limit=self.config.mem_limit,
             ports=ports,  # Exposing grpc for Python Client
-            network=self.network,
+            network=self.config.network,
             volumes=self.volumes,
             command=commands,
             hostname=self.container_name,
-            environment=env,
+            environment=self.config.node_env,
         )
-        # self.client = CasperClient(port=self.config.grpc_port)
         return container
-
-    @property
-    def network(self):
-        return self.config.network
 
     def create_resources_dir(self) -> None:
         if os.path.exists(self.host_mount_dir):
@@ -185,7 +190,10 @@ class DockerNode(LoggingDockerBase):
         path = f"{self.host_genesis_dir}/bonds.txt"
         os.makedirs(os.path.dirname(path))
         with open(path, "a") as f:
-            for i, pair in enumerate(PREGENERATED_KEYPAIRS[:N]):
+            for i, pair in enumerate(
+                Account(i)
+                for i in range(FIRST_VALIDATOR_ACCOUNT, FIRST_VALIDATOR_ACCOUNT + N)
+            ):
                 bond = N + 2 * i
                 f.write(f"{pair.public_key} {bond}\n")
 
@@ -201,25 +209,12 @@ class DockerNode(LoggingDockerBase):
         return self.cl_network.genesis_account
 
     @property
-    def test_account(self) -> str:
+    def test_account(self) -> Account:
         return self.cl_network.test_account(self)
 
     @property
     def from_address(self) -> str:
         return self.cl_network.from_address(self)
-
-    @property
-    def volumes(self) -> dict:
-        if self.config.volumes is not None:
-            return self.config.volumes
-
-        return {
-            self.host_genesis_dir: {"bind": self.CL_GENESIS_DIR, "mode": "rw"},
-            self.host_bootstrap_dir: {"bind": self.CL_BOOTSTRAP_DIR, "mode": "rw"},
-            self.host_accounts_dir: {"bind": self.CL_ACCOUNTS_DIR, "mode": "rw"},
-            self.deploy_dir: {"bind": self.CL_NODE_DEPLOY_DIR, "mode": "rw"},
-            self.socket_volume: {"bind": self.CL_SOCKETS_DIR, "mode": "rw"},
-        }
 
     @property
     def container_command(self):
@@ -245,8 +240,19 @@ class DockerNode(LoggingDockerBase):
         if "from_address" not in deploy_kwargs:
             deploy_kwargs["from_address"] = self.from_address
         deploy_output = self.client.deploy(**deploy_kwargs)
-        assert "Success!" in deploy_output
-        block_hash = extract_block_hash_from_propose_output(self.client.propose())
+
+        # Hash is returned, rather than message for Python Client
+        if self._client == self.DOCKER_CLIENT:
+            assert "Success!" in deploy_output
+
+        propose_output = self.client.propose()
+
+        block_hash = None
+        if self._client == self.PYTHON_CLIENT:
+            block_hash = propose_output.block_hash.hex()
+        elif self._client == self.DOCKER_CLIENT:
+            block_hash = extract_block_hash_from_propose_output(propose_output)
+
         assert block_hash is not None
         logging.info(
             f"The block hash: {block_hash} generated for {self.container.name}"
@@ -270,16 +276,28 @@ class DockerNode(LoggingDockerBase):
         to_account_id: int,
         amount: int,
         from_account_id: Union[str, int] = "genesis",
+        session_contract: str = TRANSFER_TO_ACCOUNT_CONTRACT,
+        payment_contract: str = PAYMENT_CONTRACT,
+        payment_args: bytes = None,
+        gas_price: int = 1,
+        gas_limit: int = MAX_PAYMENT_COST / CONV_RATE,
+        is_deploy_error_check: bool = True,
     ) -> str:
         """
         Performs a transfer using the from account if given (or genesis if not)
 
         :param to_account_id: 1-20 index of test account for transfer into
-        :param amount: amount of tokens to transfer
+        :param amount: amount of motes to transfer (mote = smallest unit of token)
         :param from_account_id: default 'genesis' account, but previously funded account_id is also valid.
+        :param session_contract: session contract to execute.
+        :param payment_contract: Payment contract to execute.
+        :param gas_price: Gas price
+        :param gas_limit: Max gas price that can be expended.
+        :param is_deploy_error_check: Check that amount transfer is success.
+
         :returns block_hash in hex str
         """
-        logging.info(f"=== Transfering {amount} to {to_account_id}")
+        logging.info(f"=== Transferring {amount} to {to_account_id}")
 
         assert (
             is_valid_account(to_account_id) and to_account_id != "genesis"
@@ -290,18 +308,35 @@ class DockerNode(LoggingDockerBase):
 
         from_account = Account(from_account_id)
         to_account = Account(to_account_id)
-        args_json = json.dumps(
-            [{"account": to_account.public_key_hex}, {"u32": amount}]
+
+        ABI = self.p_client.abi
+
+        session_args = ABI.args(
+            [ABI.account(to_account.public_key_binary), ABI.u32(amount)]
         )
-        with from_account.public_key_path as public_key_path, from_account.private_key_path as private_key_path:
-            response, deploy_hash_bytes = self.p_client.deploy(
-                from_address=from_account.public_key_hex,
-                session_contract="transfer_to_account.wasm",
-                payment_contract="transfer_to_account.wasm",
-                public_key=public_key_path,
-                private_key=private_key_path,
-                args=self.p_client.abi.args_from_json(args_json),
-            )
+        # Until payment is on for all, we have to fix the default payment args
+        if not self.config.is_payment_code_enabled:
+            logging.info("===== transfer_to_account: payment not enabled")
+            payment_contract = session_contract
+
+        # "Compatibility mode": supply payment if a test forgot to do it
+        payment_args = (
+            None
+            if payment_contract == session_contract
+            else (payment_args or MAX_PAYMENT_ABI)
+        )
+
+        response, deploy_hash_bytes = self.p_client.deploy(
+            from_address=from_account.public_key_hex,
+            session_contract=session_contract,
+            payment_contract=payment_contract,
+            public_key=from_account.public_key_path,
+            private_key=from_account.private_key_path,
+            gas_price=gas_price,
+            gas_limit=gas_limit,
+            session_args=session_args,
+            payment_args=payment_args,
+        )
 
         deploy_hash_hex = deploy_hash_bytes.hex()
         assert len(deploy_hash_hex) == 64
@@ -311,8 +346,10 @@ class DockerNode(LoggingDockerBase):
         block_hash = response.block_hash.hex()
         assert len(deploy_hash_hex) == 64
 
-        for deploy_info in self.p_client.show_deploys(block_hash):
-            assert deploy_info.is_error is False
+        if is_deploy_error_check:
+            for deploy_info in self.p_client.show_deploys(block_hash):
+                if deploy_info.is_error:
+                    raise Exception(f"transfer_to_account: {deploy_info.error_message}")
 
         return block_hash
 
@@ -322,6 +359,8 @@ class DockerNode(LoggingDockerBase):
         payment_contract: str,
         amount: int,
         from_account_id: Union[str, int] = "genesis",
+        session_args: bytes = None,
+        payment_args: bytes = None,
     ) -> str:
         abi_json_args = json.dumps([{"u32": amount}])
         return self._deploy_and_propose_with_abi_args(
@@ -347,25 +386,25 @@ class DockerNode(LoggingDockerBase):
         payment_contract: str,
         from_account: Account,
         json_args: str,
+        gas_limit: int = MAX_PAYMENT_COST / CONV_RATE,
+        gas_price: int = 1,
+        payment_args: bytes = None,
     ) -> str:
-
         response, deploy_hash_bytes = self.p_client.deploy(
             from_address=from_account.public_key_hex,
             session_contract=session_contract,
             payment_contract=payment_contract,
+            gas_limit=gas_limit,
+            gas_price=gas_price,
             public_key=from_account.public_key_path,
             private_key=from_account.private_key_path,
-            args=self.p_client.abi.args_from_json(json_args),
+            session_args=self.p_client.abi.args_from_json(json_args),
+            payment_args=payment_args,
         )
-
-        deploy_hash_hex = deploy_hash_bytes.hex()
-        assert len(deploy_hash_hex) == 64
 
         response = self.p_client.propose()
 
         block_hash = response.block_hash.hex()
-        assert len(deploy_hash_hex) == 64
-
         return block_hash
 
     def transfer_to_accounts(self, account_value_list) -> List[str]:
@@ -385,30 +424,18 @@ class DockerNode(LoggingDockerBase):
             to_addr_id, amount = avl[:2]
             from_addr_id = "genesis" if len(avl) == 2 else avl[2]
             block_hashes.append(
-                self.transfer_to_account(to_addr_id, amount, from_addr_id)
+                # TODO: don't pass payment_contract when execution cost on
+                self.transfer_to_account(
+                    to_addr_id,
+                    amount,
+                    from_addr_id,
+                    payment_contract="transfer_to_account.wasm",
+                )
             )
         return block_hashes
 
     def show_blocks(self) -> Tuple[int, str]:
         return self.exec_run(f"{self.CL_NODE_BINARY} show-blocks")
-
-    def blocks_as_list_with_depth(self, depth: int) -> List:
-        # TODO: Replace with generator using Python client
-        result = self.client.show_blocks(depth)
-        block_list = []
-        for i, section in enumerate(result.split(" ---------------\n")):
-            if i == 0:
-                continue
-            cur_block = {}
-            for line in section.split("\n"):
-                try:
-                    name, value = line.split(": ", 1)
-                    cur_block[name] = value.replace('"', "")
-                except ValueError:
-                    pass
-            block_list.append(cur_block)
-        block_list.reverse()
-        return block_list
 
     @property
     def address(self) -> str:

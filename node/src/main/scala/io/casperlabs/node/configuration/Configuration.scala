@@ -9,13 +9,12 @@ import com.github.ghik.silencer.silent
 import eu.timepit.refined._
 import eu.timepit.refined.api.Refined
 import eu.timepit.refined.numeric._
-import io.casperlabs.blockstorage.LMDBBlockStore
+import io.casperlabs.blockstorage.LMDBBlockStorage
 import io.casperlabs.casper.CasperConf
 import io.casperlabs.comm.discovery.Node
 import io.casperlabs.comm.transport.Tls
 import io.casperlabs.configuration.{relativeToDataDir, SubConfig}
 import io.casperlabs.node.configuration.Utils._
-import io.casperlabs.shared.StoreType
 
 import scala.concurrent.duration.FiniteDuration
 import scala.io.Source
@@ -29,7 +28,7 @@ final case class Configuration(
     grpc: Configuration.Grpc,
     tls: Tls,
     casper: CasperConf,
-    lmdb: LMDBBlockStore.Config,
+    lmdb: LMDBBlockStorage.Config,
     blockstorage: Configuration.BlockStorage,
     metrics: Configuration.Kamon,
     influx: Option[Configuration.Influx]
@@ -62,7 +61,6 @@ object Configuration extends ParserImplicits {
       defaultTimeout: FiniteDuration,
       bootstrap: Option[Node],
       dataDir: Path,
-      storeType: StoreType,
       maxNumOfConnections: Int,
       maxMessageSize: Int,
       chunkSize: Int,
@@ -72,8 +70,8 @@ object Configuration extends ParserImplicits {
       approvalRelayFactor: Int,
       approvalPollInterval: FiniteDuration,
       syncMaxPossibleDepth: Int Refined Positive,
-      syncMinBlockCountToCheckBranchingFactor: Int Refined NonNegative,
-      syncMaxBranchingFactor: Double Refined GreaterEqual[W.`1.0`.T],
+      syncMinBlockCountToCheckWidth: Int Refined NonNegative,
+      syncMaxBondingRate: Double Refined GreaterEqual[W.`0.0`.T],
       syncMaxDepthAncestorsRequest: Int Refined Positive,
       initSyncMaxNodes: Int,
       initSyncMinSuccessful: Int Refined Positive,

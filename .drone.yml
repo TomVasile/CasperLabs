@@ -33,7 +33,7 @@ clone:
 # resulting in Error response from daemon: invalid mount config for type "bind":
 # bind source path does not exist: /var/cache/cl-build/.sbt
 kind: pipeline
-name: run
+name: build-bors-merge
 
 steps:
 # Below is for pull_request webhooks only
@@ -44,13 +44,15 @@ steps:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
   when:
+#    changeset:
+#      includes:
+#        - "**/*.fake-test"
     event:
     - pull_request
 
 - name: git-status-post-scala-compile-pr
   commands:
   - STATUS_CHECK=$(git status)
-  - echo $STATUS_CHECK
   - if echo $STATUS_CHECK | grep -q "modified" ; then echo "$STATUS_CHECK"; exit 1; fi
   image: "casperlabs/buildenv:latest"
   when:
@@ -64,6 +66,7 @@ steps:
     CARGO_FLAGS: "--locked"
   commands:
   - "cd execution-engine/"
+  - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
   - "rustup target add --toolchain $(cat rust-toolchain) wasm32-unknown-unknown"
   - "make test test-contracts"
   - "cd ../long-running-tests"
@@ -99,6 +102,18 @@ steps:
   depends_on:
   - rust-compile-test-pr
 
+- name: black-and-flake8
+  commands:
+  - "python3 -m pip install pipenv"
+  - "cd integration-testing"
+  - "./run_flake8_black.sh"
+  image: "casperlabs/buildenv:latest"
+  when:
+    event:
+    - pull_request
+  depends_on:
+  - rust-compile-test-pr
+
 # This section is for bors' branches only
 - name: sbt-test-docker-bors
   commands:
@@ -108,7 +123,7 @@ steps:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - name: docker_sock	
+  - name: docker_sock
     path: "/var/run/docker.sock"
   when:
     branch:
@@ -118,7 +133,6 @@ steps:
 - name: git-status-post-scala-compile-bors
   commands:
   - STATUS_CHECK=$(git status)
-  - echo $STATUS_CHECK
   - if echo $STATUS_CHECK | grep -q "modified" ; then echo "$STATUS_CHECK"; exit 1; fi
   image: "casperlabs/buildenv:latest"
   when:
@@ -140,6 +154,8 @@ steps:
     - staging
     - trying
 
+# Note: Added the dependency on the sbt step to be finished first because in testing,
+# Drone was getting random sbt build failures when too many steps were running simultaneously.
 - name: run-cargo-fmt-bors
   commands:
   - "cd execution-engine"
@@ -208,7 +224,7 @@ steps:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - name: docker_sock	
+  - name: docker_sock
     path: "/var/run/docker.sock"
   when:
     branch:
@@ -225,7 +241,7 @@ steps:
   - "rm -rf /tmp/keys-DRONE-${DRONE_BUILD_NUMBER}"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - name: docker_sock	
+  - name: docker_sock
     path: "/var/run/docker.sock"
   - name: temp
     path: "/tmp"
@@ -246,7 +262,7 @@ steps:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - name: docker_sock	
+  - name: docker_sock
     path: "/var/run/docker.sock"
   - name: temp
     path: "/tmp"
@@ -281,7 +297,7 @@ steps:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - name: docker_sock	
+  - name: docker_sock
     path: "/var/run/docker.sock"
   when:
     branch:
@@ -297,7 +313,7 @@ steps:
   - "make docker-build/key-generator"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - name: docker_sock	
+  - name: docker_sock
     path: "/var/run/docker.sock"
   when:
     branch:
@@ -313,7 +329,7 @@ steps:
   - "make docker-build/explorer"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - name: docker_sock	
+  - name: docker_sock
     path: "/var/run/docker.sock"
   when:
     branch:
@@ -329,7 +345,7 @@ steps:
   - "make docker-build/grpcwebproxy"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - name: docker_sock	
+  - name: docker_sock
     path: "/var/run/docker.sock"
   when:
     branch:
@@ -372,7 +388,7 @@ steps:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
   volumes:
-  - name: docker_sock	
+  - name: docker_sock
     path: "/var/run/docker.sock"
   when:
     branch:
@@ -475,7 +491,7 @@ steps:
     DOCKER_USERNAME:
       from_secret: docker_username
   volumes:
-  - name: docker_sock	
+  - name: docker_sock
     path: "/var/run/docker.sock"
   when:
     branch:
@@ -489,6 +505,7 @@ steps:
   - docker-key-gen-merge
   - docker-explorer-merge
   - docker-grpcwebproxy-merge
+  - package-sbt-artifacts-merge
 
 - name: contract-examples
   image: plugins/downstream
@@ -509,94 +526,6 @@ steps:
     event:
     - push
   depends_on:
-  - rust-compile-for-make
-  - docker-build-ee-merge
-  - docker-key-gen-merge
-  - docker-explorer-merge
-  - docker-grpcwebproxy-merge
-  - package-sbt-artifacts-merge
-  - package-ee
-  - rsync-artifacts
-  - docker-publish
-
-- name: cleanup
-  commands:
-  - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
-  - "docker images | grep \"DRONE-${DRONE_BUILD_NUMBER}\" | awk '{print $3}' | xargs --no-run-if-empty docker rmi -f || true"
-  environment:
-    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock	
-    path: "/var/run/docker.sock"
-  when:
-    status:
-    - failure
-    - success
-  depends_on:
-  - sbt-compile-test-pr
-  - git-status-post-scala-compile-pr
-  - rust-compile-test-pr
-  - run-cargo-fmt-pr
-  - run-rust-lints-pr
-  - sbt-test-docker-bors
-  - git-status-post-scala-compile-bors
-  - rust-compile-test-bors
-  - run-cargo-fmt-bors
-  - run-rust-lints-bors
-  - try-cargo-publish-bors
-  - run-rust-benchmarks-bors
-  - docker-build-ee-int-bors
-  - docker-keys-gen-test-bors
-  - run-integration-tests
-  - rust-compile-for-make
-  - docker-build-ee-merge
-  - docker-key-gen-merge
-  - docker-explorer-merge
-  - docker-grpcwebproxy-merge
-  - package-sbt-artifacts-merge
-  - package-ee
-  - rsync-artifacts
-  - docker-publish
-
-- name: notify
-  image: plugins/slack
-  settings:
-    webhook:
-      from_secret: slack_webhook
-    channel: alerts
-    template: 
-    - |
-      *{{ uppercasefirst build.status }}*
-      Author: {{ build.author }}
-      Drone Build: <{{ build.link }}|#{{ build.number }}>
-      Commit Link: <https://github.com/{{repo.owner}}/{{repo.name}}/commit/{{build.commit}}|{{ truncate build.commit 10 }}>
-  when:
-    status:
-    - failure
-  depends_on:
-  - sbt-compile-test-pr
-  - git-status-post-scala-compile-pr
-  - rust-compile-test-pr
-  - run-cargo-fmt-pr
-  - run-rust-lints-pr
-  - sbt-test-docker-bors
-  - git-status-post-scala-compile-bors
-  - rust-compile-test-bors
-  - run-cargo-fmt-bors
-  - run-rust-lints-bors
-  - try-cargo-publish-bors
-  - run-rust-benchmarks-bors
-  - docker-build-ee-int-bors
-  - docker-keys-gen-test-bors
-  - run-integration-tests
-  - rust-compile-for-make
-  - docker-build-ee-merge
-  - docker-key-gen-merge
-  - docker-explorer-merge
-  - docker-grpcwebproxy-merge
-  - package-sbt-artifacts-merge
-  - package-ee
   - rsync-artifacts
   - docker-publish
 
@@ -617,9 +546,149 @@ trigger:
   - trying
   - staging
 
+---
+kind: pipeline
+name: cleanup
+
+clone:
+  disable: true
+
+steps:
+- name: cleanup-docker-images
+  commands:
+  - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
+  - "docker images | grep \"DRONE-${DRONE_BUILD_NUMBER}\" | awk '{print $3}' | xargs --no-run-if-empty docker rmi -f || true"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock
+    path: "/var/run/docker.sock"
+
+volumes:
+- name: docker_sock
+  host:
+    path: "/var/run/docker.sock"
+
+trigger:
+  status:
+  - failure
+  - success
+  branch:
+  - dev
+  - master
+  - "release-*"
+  - "testing*"
+  - trying
+  - staging
+
+depends_on:
+- build-bors-merge
+
+---
+kind: pipeline
+name: failed-build-alert
+
+clone:
+  disable: true
+
+steps:
+- name: notify
+  image: plugins/slack
+  settings:
+    webhook:
+      from_secret: slack_webhook
+    channel: alerts
+    template:
+    - |
+      *{{ uppercasefirst build.status }}*
+      Author: {{ build.author }}
+      Drone Build: <{{ build.link }}|#{{ build.number }}>
+      Commit Link: <https://github.com/{{repo.owner}}/{{repo.name}}/commit/{{build.commit}}|{{ truncate build.commit 10 }}>
+trigger:
+  status:
+  - failure
+  branch:
+  - dev
+  - master
+  - "release-*"
+  - "testing*"
+  - trying
+  - staging
+
+depends_on:
+- build-bors-merge
+
+---
+kind: pipeline
+name: on-tag
+
+# Run only on tagged release version
+steps:
+- name: package-sbt-artifacts-tag
+  commands:
+  - "make build-client-contracts"
+  - "sbt update test client/debian:packageBin client/universal:packageZipTarball client/rpm:packageBin node/debian:packageBin node/universal:packageZipTarball node/rpm:packageBin"
+  - "mkdir -p artifacts/${DRONE_BRANCH}"
+  - "cp client/target/casperlabs-client_*_all.deb client/target/universal/*.tgz artifacts/${DRONE_BRANCH}"
+  - "cp client/target/rpm/RPMS/noarch/casperlabs-client-*.noarch.rpm artifacts/${DRONE_BRANCH}"
+  - "cp node/target/casperlabs-node_*_all.deb node/target/universal/*.tgz artifacts/${DRONE_BRANCH}"
+  - "cp node/target/rpm/RPMS/noarch/casperlabs-node-*.noarch.rpm artifacts/${DRONE_BRANCH}"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock
+    path: "/var/run/docker.sock"
+  when:
+    ref:
+    - refs/tags/v*
+
+- name: package-ee-tag
+  commands:
+  - "mkdir -p artifacts/${DRONE_BRANCH}"
+  - "make cargo-package-all"
+  - "cp execution-engine/target/system-contracts.tar.gz artifacts/${DRONE_BRANCH}"
+  - "cp execution-engine/target/debian/casperlabs-engine-grpc-server_*.deb artifacts/${DRONE_BRANCH}"
+  - "cp execution-engine/target/release/rpmbuild/RPMS/x86_64/casperlabs-engine-grpc-server-*.rpm artifacts/${DRONE_BRANCH}"
+  - "WORKING_DIR=$(pwd) ; cd execution-engine/target/release/rpmbuild/SOURCES ; OS=$(uname -s | tr '[:upper:]' '[:lower:]') ; ARCH=$(uname -p) ; SOURCE=$(ls casperlabs-engine-grpc-server-*.tar.gz | sed \"s/.tar.gz//\") ; TARGET=$(ls $SOURCE*.tar.gz | sed \"s/.tar.gz/_\"$OS\"_\"$ARCH\".tar.gz/\") ; tar -xzf $SOURCE.tar.gz ; tar -czf $TARGET -C $SOURCE/usr/bin/ . && cp $TARGET $WORKING_DIR/artifacts/${DRONE_BRANCH}"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock
+    path: "/var/run/docker.sock"
+  when:
+    ref:
+    - refs/tags/v*
+
+- name: github_publish_release_artifacts
+  settings:
+    api_key:
+      from_secret: github_token
+    checksum:
+    - sha256
+    - md5
+    files:
+    - "artifacts/${DRONE_BRANCH}/*"
+    prerelease:
+    - true
+  image: plugins/github-release
+  when:
+    ref:
+    - refs/tags/v*
+  depends_on:
+  - package-sbt-artifacts-tag
+  - package-ee-tag
+
+volumes:
+- name: docker_sock
+  host:
+    path: "/var/run/docker.sock"
+
+trigger:
+  ref:
+  - refs/tags/v*
+
 # Signature for Drone
 ---
 kind: signature
 hmac: aba74ddcedb4ac74f39f8884cd644c6f13eb4ed7f7226c7b9fefda17d0241af2
-
-...

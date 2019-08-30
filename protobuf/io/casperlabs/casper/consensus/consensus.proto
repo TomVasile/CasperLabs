@@ -39,7 +39,7 @@ message Deploy {
         uint64 nonce = 2;
         // Current time milliseconds.
         uint64 timestamp = 3;
-        // Conversion rate between the cost of Wasm opcodes and the tokens sent by the `payment_code`.
+        // Conversion rate between the cost of Wasm opcodes and the motes sent by the `payment_code`.
         uint64 gas_price = 4;
         // Hash of the body structure as a whole.
         bytes body_hash = 5;
@@ -48,7 +48,9 @@ message Deploy {
     message Body {
         // Wasm code of the smart contract to be executed.
         Code session = 1;
-        // Wasm code that transfers some tokens to the validators as payment in exchange to run the Deploy.
+        // Wasm code that transfers some motes to the validators as payment in exchange to run the Deploy.
+        // Note: the word "mote" means "a tiny piece of a substance". Here we are referring to the smallest,
+        // indivisible unit of the CL token. This is the equivalent of a Satoshi on Bitcoin or a Wei on Ethereum.
         Code payment = 2;
     }
 
@@ -56,7 +58,16 @@ message Deploy {
     // Includes both binary instructions (wasm) and optionally, arguments
     // to those instructions encoded via our ABI
     message Code {
-        bytes code = 1; // wasm byte code
+        oneof contract {
+            // Wasm byte code.
+            bytes wasm = 1;
+            // Public hash address of an already stored contract.
+            bytes hash = 3;
+            // Name of a stored contract associated with the executing account (uref or hash).
+            string name = 4;
+            // URef of a stored contract.
+            bytes uref = 5;
+        }
         bytes args = 2; // ABI-encoded arguments
     }
 }

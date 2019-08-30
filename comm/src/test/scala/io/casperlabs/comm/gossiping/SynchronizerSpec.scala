@@ -8,7 +8,7 @@ import eu.timepit.refined.api.Refined
 import eu.timepit.refined.auto._
 import eu.timepit.refined.numeric._
 import io.casperlabs.casper.consensus.Block.Justification
-import io.casperlabs.casper.consensus.{BlockSummary, GenesisCandidate}
+import io.casperlabs.casper.consensus.{BlockSummary, Bond, GenesisCandidate}
 import io.casperlabs.comm.discovery.Node
 import io.casperlabs.comm.gossiping
 import io.casperlabs.comm.gossiping.Synchronizer.SyncError
@@ -37,13 +37,15 @@ class SynchronizerSpec
   override implicit val generatorDrivenConfig: PropertyCheckConfiguration =
     PropertyCheckConfiguration(minSuccessful = 25, workers = 1)
 
+  override def numValidators = 3
+
   implicit val consensusConfig: ConsensusConfig = ConsensusConfig(dagDepth = 5, dagWidth = 5)
 
   def genPositiveInt(min: Int, max: Int): Gen[Int Refined Positive] =
     Gen.choose(min, max).map(i => refineV[Positive](i).right.get)
 
-  def genDoubleGreaterEqualOf1(max: Double): Gen[Double Refined GreaterEqual[W.`1.0`.T]] =
-    Gen.choose(1.0, max).map(i => refineV[GreaterEqual[W.`1.0`.T]](i).right.get)
+  def genDoubleGreaterEqualOf0(max: Double): Gen[Double Refined GreaterEqual[W.`0.0`.T]] =
+    Gen.choose(0.0, max).map(i => refineV[GreaterEqual[W.`0.0`.T]](i).right.get)
 
   "Synchronizer" when {
     "gets too many blocks during initializing" should {
@@ -114,15 +116,54 @@ class SynchronizerSpec
         genPartialDagFromTips(
           ConsensusConfig(dagDepth = 5, dagBranchingFactor = 4, dagWidth = Int.MaxValue)
         ),
-        genDoubleGreaterEqualOf1(3)
+        genDoubleGreaterEqualOf0(3)
       ) { (dag, n) =>
         log.reset()
-        TestFixture(dag)(maxBranchingFactor = n, minBlockCountToCheckBranchingFactor = 0) {
-          (synchronizer, _) =>
-            synchronizer.syncDag(Node(), Set(dag.head.blockHash)).foreachL { dagOrError =>
-              dagOrError.isLeft shouldBe true
-              dagOrError.left.get shouldBe an[SyncError.TooWide]
+        TestFixture(dag)(maxBondingRate = n, minBlockCountToCheckWidth = 0) { (synchronizer, _) =>
+          synchronizer.syncDag(Node(), Set(dag.head.blockHash)).foreachL { dagOrError =>
+            dagOrError.isLeft shouldBe true
+            dagOrError.left.get shouldBe an[SyncError.TooWide]
+          }
+        }
+      }
+    }
+    "streamed DAG is not abnormally wide but has justifications on different ranks" should {
+      "not return SyncError.TooWide" in forAll(
+        genSummaryDagFromGenesis(
+          ConsensusConfig(dagSize = 20)
+        )
+      ) { dag =>
+        val summaryMap = dag.groupBy(_.blockHash).mapValues(_.head)
+        def collectAncestors(acc: Set[ByteString], blockHash: ByteString): Set[ByteString] = {
+          val summary = summaryMap(blockHash)
+          val deps = summary.getHeader.justifications
+            .map(_.latestBlockHash) ++ summary.getHeader.parentHashes
+          deps.foldLeft(acc) {
+            case (acc, dep) if !acc(dep) =>
+              collectAncestors(acc + dep, dep)
+            case (acc, _) =>
+              acc
+          }
+        }
+        val target    = dag.last.blockHash
+        val ancestors = collectAncestors(Set(target), target)
+        val bonds     = dag.map(_.getHeader.validatorPublicKey).distinct.map(Bond(_, 1))
+        val subdag = dag.filter(x => ancestors(x.blockHash)).map { summary =>
+          summary
+            .withHeader(summary.getHeader.withState(summary.getHeader.getState.withBonds(bonds)))
+        }
+        log.reset()
+        TestFixture(subdag.reverse)(
+          maxBondingRate = 1.0,
+          minBlockCountToCheckWidth = 0,
+          maxDepthAncestorsRequest = 20
+        ) { (synchronizer, _) =>
+          synchronizer.syncDag(Node(), Set(target)).map {
+            _ match {
+              case Right(dag) => dag should contain theSameElementsAs subdag
+              case Left(ex)   => throw ex
             }
+          }
         }
       }
     }
@@ -258,10 +299,10 @@ class SynchronizerSpec
         genPartialDagFromTips(
           ConsensusConfig(dagDepth = 3, dagBranchingFactor = 3, dagWidth = Int.MaxValue)
         ),
-        genDoubleGreaterEqualOf1(2)
+        genDoubleGreaterEqualOf0(2)
       ) { (dag, n) =>
         log.reset()
-        TestFixture(dag)(maxBranchingFactor = n, minBlockCountToCheckBranchingFactor = Int.MaxValue) {
+        TestFixture(dag)(maxBondingRate = n, minBlockCountToCheckWidth = Int.MaxValue) {
           (synchronizer, _) =>
             synchronizer.syncDag(Node(), Set(dag.head.blockHash)).foreachL { dagOrError =>
               dagOrError.isRight shouldBe true
@@ -426,9 +467,9 @@ object SynchronizerSpec {
   object TestFixture {
     def apply(dags: Vector[BlockSummary]*)(
         maxPossibleDepth: Int Refined Positive = Int.MaxValue,
-        maxBranchingFactor: Double Refined GreaterEqual[W.`1.0`.T] = Double.MaxValue,
+        maxBondingRate: Double Refined GreaterEqual[W.`0.0`.T] = 1.0,
         maxDepthAncestorsRequest: Int Refined Positive = Int.MaxValue,
-        minBlockCountToCheckBranchingFactor: Int Refined NonNegative = Int.MaxValue,
+        minBlockCountToCheckWidth: Int Refined NonNegative = Int.MaxValue,
         maxInitialBlockCount: Int Refined Positive = Int.MaxValue,
         isInitial: Boolean = false,
         validate: BlockSummary => Task[Unit] = _ => Task.unit,
@@ -446,8 +487,8 @@ object SynchronizerSpec {
           _ => MockGossipService(requestsCounter, requestsGauge, error, knownHashes, dags: _*),
         backend = MockBackend(tips, justifications, notInDag, validate),
         maxPossibleDepth = maxPossibleDepth,
-        minBlockCountToCheckBranchingFactor = minBlockCountToCheckBranchingFactor,
-        maxBranchingFactor = maxBranchingFactor,
+        minBlockCountToCheckWidth = minBlockCountToCheckWidth,
+        maxBondingRate = maxBondingRate,
         maxDepthAncestorsRequest = maxDepthAncestorsRequest,
         maxInitialBlockCount = maxInitialBlockCount,
         isInitialRef = Ref.unsafe[Task, Boolean](isInitial)

@@ -9,14 +9,13 @@ import cats.syntax.show._
 import eu.timepit.refined._
 import eu.timepit.refined.auto._
 import eu.timepit.refined.numeric._
-import io.casperlabs.blockstorage.{BlockDagFileStorage, LMDBBlockStore}
+import io.casperlabs.blockstorage.{FileDagStorage, LMDBBlockStorage}
 import io.casperlabs.casper.CasperConf
 import io.casperlabs.comm.discovery.NodeUtils._
 import io.casperlabs.comm.discovery.{Node, NodeIdentifier}
 import io.casperlabs.comm.transport.Tls
 import io.casperlabs.configuration.ignore
 import io.casperlabs.node.configuration.Utils._
-import io.casperlabs.shared.StoreType
 import org.scalacheck.ScalacheckShapeless._
 import org.scalatest._
 import org.scalatest.prop.GeneratorDrivenPropertyChecks
@@ -42,6 +41,7 @@ class ConfigurationSpec
       workers = 1
     )
 
+  // Random value generators for refined types are in ArbitraryImplicits.
   val defaultConf: Configuration = {
     val server = Configuration.Server(
       host = "test".some,
@@ -57,7 +57,6 @@ class ConfigurationSpec
         1,
         1
       ).some,
-      storeType = StoreType.LMDB,
       dataDir = Paths.get("/tmp"),
       maxNumOfConnections = 1,
       maxMessageSize = 1,
@@ -68,8 +67,8 @@ class ConfigurationSpec
       approvalRelayFactor = 1,
       approvalPollInterval = FiniteDuration(1, TimeUnit.SECONDS),
       syncMaxPossibleDepth = 1,
-      syncMinBlockCountToCheckBranchingFactor = 1,
-      syncMaxBranchingFactor = 1.0,
+      syncMinBlockCountToCheckWidth = 1,
+      syncMaxBondingRate = 1.0,
       syncMaxDepthAncestorsRequest = 1,
       initSyncMaxNodes = 1,
       initSyncMinSuccessful = 1,
@@ -105,7 +104,7 @@ class ConfigurationSpec
       maximumBond = 1L,
       requiredSigs = 1,
       genesisAccountPublicKeyPath = Paths.get("/tmp/test").some,
-      initialTokens = BigInt(1),
+      initialMotes = BigInt(1),
       mintCodePath = Paths.get("/tmp/test").some,
       posCodePath = Paths.get("/tmp/test").some,
       shardId = "test",
@@ -115,7 +114,6 @@ class ConfigurationSpec
       approveGenesisDuration = FiniteDuration(1, TimeUnit.SECONDS),
       deployTimestamp = 1L.some,
       genesisPath = Paths.get("/tmp/genesis"),
-      ignoreDeploySignature = false,
       autoProposeEnabled = false,
       autoProposeCheckInterval = FiniteDuration(1, TimeUnit.SECONDS),
       autoProposeMaxInterval = FiniteDuration(1, TimeUnit.SECONDS),
@@ -126,9 +124,9 @@ class ConfigurationSpec
       key = Paths.get("/tmp/test"),
       secureRandomNonBlocking = false
     )
-    val lmdb = LMDBBlockStore.Config(
-      dir = Paths.get("/tmp/lmdb-block-store"),
-      blockStoreSize = 1L,
+    val lmdb = LMDBBlockStorage.Config(
+      dir = Paths.get("/tmp/lmdb-block-storage"),
+      blockStorageSize = 1L,
       maxDbs = 1,
       maxReaders = 1,
       useTls = false
@@ -376,14 +374,11 @@ class ConfigurationSpec
         .toLowerCase
 
     val tables = reduce(conf, Map.empty[String, Map[String, String]]) {
-      case s: String               => s""""$s""""
-      case d: FiniteDuration       => s""""${d.toString.replace(" ", "")}""""
-      case _: StoreType.Mixed.type => s""""mixed""""
-      case _: StoreType.LMDB.type  => s""""lmdb""""
-      case _: StoreType.InMem.type => s""""inmem""""
-      case p: Node                 => s""""${p.show}""""
-      case p: java.nio.file.Path   => s""""${p.toString}""""
-      case x                       => x.toString
+      case s: String             => s""""$s""""
+      case d: FiniteDuration     => s""""${d.toString.replace(" ", "")}""""
+      case p: Node               => s""""${p.show}""""
+      case p: java.nio.file.Path => s""""${p.toString}""""
+      case x                     => x.toString
     } { (acc, fullFieldName, field) =>
       val tableName :: fieldName = fullFieldName
       val table                  = dashify(tableName)

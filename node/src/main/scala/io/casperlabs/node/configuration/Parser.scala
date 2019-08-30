@@ -7,7 +7,6 @@ import cats.syntax.either._
 import io.casperlabs.comm.CommError
 import io.casperlabs.comm.discovery.Node
 import io.casperlabs.comm.discovery.NodeUtils._
-import io.casperlabs.shared.StoreType
 import eu.timepit.refined._
 import eu.timepit.refined.numeric._
 import eu.timepit.refined.api.Refined
@@ -43,10 +42,6 @@ private[configuration] trait ParserImplicits {
       .leftMap(_.getMessage)
   implicit val peerNodeParser: Parser[Node] = s =>
     Node.fromAddress(s).leftMap(CommError.errorMessage)
-  implicit val storeTypeParser: Parser[StoreType] = s =>
-    StoreType
-      .from(s)
-      .fold(s"Failed to parse '$s' as StoreType".asLeft[StoreType])(_.asRight[String])
 
   implicit val positiveIntParser: Parser[Refined[Int, Positive]] =
     s =>
@@ -69,6 +64,12 @@ private[configuration] trait ParserImplicits {
         w <- refineV[GreaterEqual[W.`1.0`.T]](d)
       } yield w
 
+  implicit val gte0DoubleParser: Parser[Refined[Double, GreaterEqual[W.`0.0`.T]]] =
+    s =>
+      for {
+        d <- Try(s.toDouble).toEither.leftMap(_.getMessage)
+        w <- refineV[GreaterEqual[W.`0.0`.T]](d)
+      } yield w
 }
 
 private[configuration] object Parser {

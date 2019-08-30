@@ -6,6 +6,7 @@ use std::io::ErrorKind;
 use std::marker::{Send, Sync};
 use std::time::Instant;
 
+use crate::engine_server::ipc::CommitResponse;
 use contract_ffi::key::Key;
 use contract_ffi::value::account::{BlockTime, PublicKey};
 use contract_ffi::value::U512;
@@ -17,7 +18,6 @@ use engine_core::engine_state::{
 };
 use engine_core::execution::{Executor, WasmiExecutor};
 use engine_core::tracking_copy::QueryResult;
-use engine_server::ipc::CommitResponse;
 use engine_shared::logging;
 use engine_shared::logging::{log_duration, log_info};
 use engine_shared::newtypes::{Blake2bHash, CorrelationId};
@@ -49,8 +49,9 @@ const TAG_RESPONSE_GENESIS: &str = "genesis_response";
 
 // Idea is that Engine will represent the core of the execution engine project.
 // It will act as an entry point for execution of Wasm binaries.
-// Proto definitions should be translated into domain objects when Engine's API is invoked.
-// This way core won't depend on casperlabs-engine-grpc-server (outer layer) leading to cleaner design.
+// Proto definitions should be translated into domain objects when Engine's API
+// is invoked. This way core won't depend on casperlabs-engine-grpc-server
+// (outer layer) leading to cleaner design.
 impl<H> ipc_grpc::ExecutionEngineService for EngineState<H>
 where
     H: History,
@@ -193,6 +194,67 @@ where
             Err(error) => {
                 logging::log_error("deploy results error: RootNotFound");
                 let mut exec_response = ipc::ExecResponse::new();
+                exec_response.set_missing_parent(error);
+                exec_response
+            }
+        };
+
+        log_duration(
+            correlation_id,
+            METRIC_DURATION_EXEC,
+            TAG_RESPONSE_EXEC,
+            start.elapsed(),
+        );
+
+        grpc::SingleResponse::completed(exec_response)
+    }
+
+    fn execute(
+        &self,
+        _request_options: ::grpc::RequestOptions,
+        exec_request: ipc::ExecuteRequest,
+    ) -> grpc::SingleResponse<ipc::ExecuteResponse> {
+        let start = Instant::now();
+        let correlation_id = CorrelationId::new();
+
+        let protocol_version = exec_request.get_protocol_version();
+
+        // TODO: don't unwrap
+        let prestate_hash: Blake2bHash = exec_request.get_parent_state_hash().try_into().unwrap();
+
+        let blocktime = BlockTime(exec_request.get_block_time());
+
+        // TODO: don't unwrap
+        let wasm_costs = WasmCosts::from_version(protocol_version.value).unwrap();
+
+        let deploys = exec_request.get_deploys();
+
+        let preprocessor: WasmiPreprocessor = WasmiPreprocessor::new(wasm_costs);
+
+        let executor = WasmiExecutor;
+
+        let deploys_result: Result<Vec<ipc::DeployResult>, ipc::RootNotFound> = execute_deploys(
+            &self,
+            &executor,
+            &preprocessor,
+            prestate_hash,
+            blocktime,
+            deploys,
+            protocol_version,
+            correlation_id,
+        );
+
+        let exec_response = match deploys_result {
+            Ok(deploy_results) => {
+                let mut exec_response = ipc::ExecuteResponse::new();
+                let mut exec_result = ipc::ExecResult::new();
+                exec_result.set_deploy_results(protobuf::RepeatedField::from_vec(deploy_results));
+                exec_response.set_success(exec_result);
+                exec_response
+            }
+            Err(error) => {
+                logging::log_error("deploy results error: RootNotFound");
+                let mut exec_response = ipc::ExecuteResponse::new();
                 exec_response.set_missing_parent(error);
                 exec_response
             }
@@ -364,8 +426,8 @@ where
             ret
         };
 
-        let initial_tokens: U512 = match genesis_request.get_initial_tokens().try_into() {
-            Ok(initial_tokens) => initial_tokens,
+        let initial_motes: U512 = match genesis_request.get_initial_motes().try_into() {
+            Ok(initial_motes) => initial_motes,
             Err(err) => {
                 let err_msg = format!("{:?}", err);
                 logging::log_error(&err_msg);
@@ -425,7 +487,7 @@ where
         let genesis_response = match self.commit_genesis(
             correlation_id,
             genesis_account_addr,
-            initial_tokens,
+            initial_motes,
             mint_code_bytes,
             proof_of_stake_code_bytes,
             genesis_validators,
@@ -476,6 +538,21 @@ where
 
         grpc::SingleResponse::completed(genesis_response)
     }
+
+    fn run_genesis_with_chainspec(
+        &self,
+        _request_options: ::grpc::RequestOptions,
+        _genesis_config: ipc::ChainSpec_GenesisConfig,
+    ) -> ::grpc::SingleResponse<ipc::GenesisResponse> {
+        let mut genesis_response = ipc::GenesisResponse::new();
+        let mut genesis_deploy_error = ipc::GenesisDeployError::new();
+        let err_msg = String::from("Unimplemented!");
+
+        genesis_deploy_error.set_message(err_msg);
+        genesis_response.set_failed_deploy(genesis_deploy_error);
+
+        grpc::SingleResponse::completed(genesis_response)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -497,16 +574,21 @@ where
     H::Error: Into<engine_core::execution::Error>,
 {
     // We want to treat RootNotFound error differently b/c it should short-circuit
-    // the execution of ALL deploys within the block. This is because all of them share
-    // the same prestate and all of them would fail.
+    // the execution of ALL deploys within the block. This is because all of them
+    // share the same prestate and all of them would fail.
     // Iterator (Result<_, _> + collect()) will short circuit the execution
     // when run_deploy returns Err.
     deploys
         .iter()
         .map(|deploy| {
-            let session_contract = deploy.get_session();
-            let module_bytes = &session_contract.code;
-            let args = &session_contract.args;
+            let session = deploy.get_session();
+            let session_module_bytes = &session.code;
+            let session_args = &session.args;
+
+            let payment = deploy.get_payment();
+            let payment_module_bytes = &payment.code;
+            let payment_args = &payment.args;
+
             let address = {
                 let address_len = deploy.address.len();
                 if address_len != EXPECTED_PUBLIC_KEY_LENGTH {
@@ -546,20 +628,122 @@ where
             };
 
             let nonce = deploy.nonce;
-            // TODO: is the rounding in this division ok?
-            let gas_limit =
-                (deploy.tokens_transferred_in_payment as u64) / (deploy.gas_price as u64);
             let protocol_version = protocol_version.value;
             engine_state
                 .run_deploy(
-                    module_bytes,
-                    args,
+                    session_module_bytes,
+                    session_args,
+                    payment_module_bytes,
+                    payment_args,
                     address,
                     authorized_keys,
                     blocktime,
                     nonce,
                     prestate_hash,
-                    gas_limit,
+                    protocol_version,
+                    correlation_id,
+                    executor,
+                    preprocessor,
+                )
+                .map(Into::into)
+                .map_err(Into::into)
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_deploys<A, H, E, P>(
+    engine_state: &EngineState<H>,
+    executor: &E,
+    preprocessor: &P,
+    prestate_hash: Blake2bHash,
+    blocktime: BlockTime,
+    deploys: &[ipc::DeployItem],
+    protocol_version: &state::ProtocolVersion,
+    correlation_id: CorrelationId,
+) -> Result<Vec<ipc::DeployResult>, ipc::RootNotFound>
+where
+    H: History,
+    E: Executor<A>,
+    P: Preprocessor<A>,
+    EngineError: From<H::Error>,
+    H::Error: Into<engine_core::execution::Error>,
+{
+    // We want to treat RootNotFound error differently b/c it should short-circuit
+    // the execution of ALL deploys within the block. This is because all of them
+    // share the same prestate and all of them would fail.
+    // Iterator (Result<_, _> + collect()) will short circuit the execution
+    // when run_deploy returns Err.
+    deploys
+        .iter()
+        .map(|deploy| {
+            let session_payload = match deploy.get_session().to_owned().payload {
+                Some(payload) => payload.into(),
+                None => {
+                    return Ok(
+                        ExecutionResult::precondition_failure(EngineError::DeployError).into(),
+                    )
+                }
+            };
+
+            let payment_payload = match deploy.get_payment().to_owned().payload {
+                Some(payload) => payload.into(),
+                None => {
+                    return Ok(
+                        ExecutionResult::precondition_failure(EngineError::DeployError).into(),
+                    )
+                }
+            };
+
+            let address = {
+                let address_len = deploy.address.len();
+                if address_len != EXPECTED_PUBLIC_KEY_LENGTH {
+                    let err = EngineError::InvalidPublicKeyLength {
+                        expected: EXPECTED_PUBLIC_KEY_LENGTH,
+                        actual: address_len,
+                    };
+                    let failure = ExecutionResult::precondition_failure(err);
+                    return Ok(failure.into());
+                }
+                let mut dest = [0; EXPECTED_PUBLIC_KEY_LENGTH];
+                dest.copy_from_slice(&deploy.address);
+                Key::Account(dest)
+            };
+
+            // Parse all authorization keys from IPC into a vector
+            let authorization_keys: BTreeSet<PublicKey> = {
+                let maybe_keys: Result<BTreeSet<_>, EngineError> = deploy
+                    .authorization_keys
+                    .iter()
+                    .map(|key_bytes| {
+                        // Try to convert an element of bytes into a possibly
+                        // valid PublicKey with error handling
+                        PublicKey::try_from(key_bytes.as_slice()).map_err(|_| {
+                            EngineError::InvalidPublicKeyLength {
+                                expected: EXPECTED_PUBLIC_KEY_LENGTH,
+                                actual: key_bytes.len(),
+                            }
+                        })
+                    })
+                    .collect();
+
+                match maybe_keys {
+                    Ok(keys) => keys,
+                    Err(error) => return Ok(ExecutionResult::precondition_failure(error).into()),
+                }
+            };
+
+            let nonce = deploy.nonce;
+            let protocol_version = protocol_version.value;
+            engine_state
+                .run_deploy_item(
+                    session_payload,
+                    payment_payload,
+                    address,
+                    authorization_keys,
+                    blocktime,
+                    nonce,
+                    prestate_hash,
                     protocol_version,
                     correlation_id,
                     executor,
@@ -608,8 +792,9 @@ where
         Err(GetBondedValidatorsError::PostStateHashNotFound(root_hash)) => {
             // I am not sure how to parse this error. It would mean that most probably
             // we have screwed up something in the trie store because `root_hash` was
-            // calculated by us just a moment ago. It [root_hash] is a `poststate_hash` we return to the node.
-            // There is no proper error variant in the `engine_storage::error::Error` for it though.
+            // calculated by us just a moment ago. It [root_hash] is a `poststate_hash` we
+            // return to the node. There is no proper error variant in the
+            // `engine_storage::error::Error` for it though.
             let error_message = format!(
                 "Post state hash not found {} when calculating bonded validators set.",
                 root_hash
@@ -628,7 +813,8 @@ where
     }
 }
 
-// Helper method which returns single DeployResult that is set to be a WasmError.
+// Helper method which returns single DeployResult that is set to be a
+// WasmError.
 pub fn new<E: ExecutionEngineService + Sync + Send + 'static>(
     socket: &str,
     e: E,

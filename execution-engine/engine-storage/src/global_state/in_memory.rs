@@ -6,16 +6,17 @@ use contract_ffi::key::Key;
 use contract_ffi::value::Value;
 use engine_shared::newtypes::{Blake2bHash, CorrelationId};
 use engine_shared::transform::Transform;
-use error;
-use global_state::StateReader;
-use global_state::{commit, CommitResult, History};
-use trie::operations::create_hashed_empty_trie;
-use trie::Trie;
-use trie_store::in_memory::{
-    self, InMemoryEnvironment, InMemoryReadTransaction, InMemoryTrieStore,
-};
-use trie_store::operations::{read, write, ReadResult, WriteResult};
-use trie_store::{Transaction, TransactionSource, TrieStore};
+
+use crate::error::{self, in_memory};
+use crate::global_state::StateReader;
+use crate::global_state::{commit, CommitResult, History};
+use crate::transaction_source::in_memory::{InMemoryEnvironment, InMemoryReadTransaction};
+use crate::transaction_source::{Transaction, TransactionSource};
+use crate::trie::operations::create_hashed_empty_trie;
+use crate::trie::Trie;
+use crate::trie_store::in_memory::InMemoryTrieStore;
+use crate::trie_store::operations::{read, write, ReadResult, WriteResult};
+use crate::trie_store::TrieStore;
 
 /// Represents a "view" of global state at a particular root hash.
 pub struct InMemoryGlobalState {
@@ -61,7 +62,8 @@ impl InMemoryGlobalState {
         }
     }
 
-    /// Creates a state from a given set of [`Key`](contract_ffi::key::key), [`Value`](contract_ffi::value::Value) pairs
+    /// Creates a state from a given set of [`Key`](contract_ffi::key::key),
+    /// [`Value`](contract_ffi::value::Value) pairs
     pub fn from_pairs(
         correlation_id: CorrelationId,
         pairs: &[(Key, Value)],
@@ -163,7 +165,7 @@ impl History for InMemoryGlobalState {
 
 #[cfg(test)]
 mod tests {
-    use engine_shared::init::mocked_account;
+    use engine_shared::test_utils;
 
     use super::*;
 
@@ -312,7 +314,7 @@ mod tests {
             202u8, 169, 195, 180, 73, 241, 1, 207, 158, 155, 105, 130, 222, 149, 113, 83, 244, 33,
             11, 132, 57, 102, 129, 52, 188, 253, 43, 243, 67, 176, 41, 151,
         ];
-        let init_state = mocked_account([48u8; 32]);
+        let init_state = test_utils::mocked_account([48u8; 32]);
         let global_state = InMemoryGlobalState::from_pairs(correlation_id, &init_state).unwrap();
         assert_eq!(expected_bytes, global_state.root_hash.to_vec())
     }
