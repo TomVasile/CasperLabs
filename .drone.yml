@@ -46,7 +46,7 @@ steps:
   when:
     changeset:
       includes:
-        - "**/*.scala"
+        - "**/*.fake-test"
     event:
     - pull_request
 
