@@ -97,6 +97,8 @@ steps:
       includes:
       - "**/**.rs"
       - "**/Makefile"
+  depends_on:
+  - rust-compile-test-pr
 
 - name: run-rust-lints-pr
   commands:
@@ -112,6 +114,8 @@ steps:
       includes:
       - "**/**.rs"
       - "**/Makefile"
+  depends_on:
+  - rust-compile-test-pr
 
 - name: black-and-flake8
   commands:
@@ -125,8 +129,6 @@ steps:
     changeset:
       includes:
       - "integration-testing/**"
-  depends_on:
-  - sbt-compile-test-pr
 
 # This section is for bors' branches only
 - name: sbt-test-docker-bors
