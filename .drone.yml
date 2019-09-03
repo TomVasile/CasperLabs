@@ -125,6 +125,8 @@ steps:
     changeset:
       includes:
       - "integration-testing/**"
+  depends_on:
+  - sbt-compile-test-pr
 
 # This section is for bors' branches only
 - name: sbt-test-docker-bors
