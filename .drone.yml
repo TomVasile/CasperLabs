@@ -58,8 +58,6 @@ steps:
   when:
     event:
     - pull_request
-  depends_on:
-  - sbt-compile-test-pr
 
 - name: rust-compile-test-pr
   environment:
@@ -84,8 +82,6 @@ steps:
   when:
     event:
     - pull_request
-  depends_on:
-  - rust-compile-test-pr
 
 - name: run-rust-lints-pr
   commands:
@@ -97,8 +93,6 @@ steps:
   when:
     event:
     - pull_request
-  depends_on:
-  - rust-compile-test-pr
 
 - name: black-and-flake8
   commands:
@@ -109,8 +103,6 @@ steps:
   when:
     event:
     - pull_request
-  depends_on:
-  - rust-compile-test-pr
 
 # This section is for bors' branches only
 - name: sbt-test-docker-bors
@@ -137,8 +129,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - sbt-test-docker-bors
 
 - name: rust-compile-test-bors
   environment:
@@ -165,9 +155,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - rust-compile-test-bors
-  - sbt-test-docker-bors
 
 - name: run-rust-lints-bors
   commands:
@@ -180,9 +167,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - rust-compile-test-bors
-  - sbt-test-docker-bors
 
 - name: try-cargo-publish-bors
   commands:
@@ -193,9 +177,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - rust-compile-test-bors
-  - sbt-test-docker-bors
 
 - name: run-rust-benchmarks-bors
   commands:
@@ -206,9 +187,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - rust-compile-test-bors
-  - sbt-test-docker-bors
 
 - name: docker-build-ee-int-bors
   commands:
@@ -228,9 +206,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - rust-compile-test-bors
-  - sbt-test-docker-bors
 
 - name: docker-keys-gen-test-bors
   commands:
@@ -247,8 +222,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - docker-build-ee-int-bors
 
 - name: run-integration-tests
   commands:
@@ -268,8 +241,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - docker-build-ee-int-bors
 
 # The below section is for post-bors push webhooks
 - name: rust-compile-for-make
@@ -366,12 +337,6 @@ steps:
     - master
     event:
     - push
-  depends_on:
-  - rust-compile-for-make
-  - docker-build-ee-merge
-  - docker-key-gen-merge
-  - docker-explorer-merge
-  - docker-grpcwebproxy-merge
 
 - name: package-sbt-artifacts-merge
   commands:
@@ -395,8 +360,6 @@ steps:
     - master
     event:
     - push
-  depends_on:
-  - make-clean-before-package
 
 - name: package-ee
   commands:
@@ -414,8 +377,6 @@ steps:
     - master
     event:
     - push
-  depends_on:
-  - make-clean-before-package
 
 - name: rsync-artifacts
   image: drillster/drone-rsync
@@ -442,9 +403,6 @@ steps:
     - master
     event:
     - push
-  depends_on:
-  - package-sbt-artifacts-merge
-  - package-ee
 
 - name: docker-publish
   commands:
@@ -498,12 +456,6 @@ steps:
     - master
     event:
     - push
-  depends_on:
-  - docker-build-ee-merge
-  - docker-key-gen-merge
-  - docker-explorer-merge
-  - docker-grpcwebproxy-merge
-  - package-sbt-artifacts-merge
 
 - name: contract-examples
   image: plugins/downstream
@@ -523,9 +475,6 @@ steps:
     - master
     event:
     - push
-  depends_on:
-  - rsync-artifacts
-  - docker-publish
 
 volumes:
 - name: docker_sock
