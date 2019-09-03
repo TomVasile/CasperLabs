@@ -58,6 +58,9 @@ steps:
   when:
     event:
     - pull_request
+    changeset:
+      includes:
+      - "**/**.scala"
 
 - name: rust-compile-test-pr
   environment:
@@ -71,6 +74,9 @@ steps:
   when:
     event:
     - pull_request
+    changeset:
+      includes:
+      - "**/**.rs"
 
 - name: run-cargo-fmt-pr
   commands:
@@ -82,6 +88,9 @@ steps:
   when:
     event:
     - pull_request
+    changeset:
+      includes:
+      - "**/**.rs"
 
 - name: run-rust-lints-pr
   commands:
@@ -93,6 +102,9 @@ steps:
   when:
     event:
     - pull_request
+    changeset:
+      includes:
+      - "**/**.rs"
 
 - name: black-and-flake8
   commands:
@@ -103,6 +115,9 @@ steps:
   when:
     event:
     - pull_request
+    changeset:
+      includes:
+      - "integration-testing/**"
 
 # This section is for bors' branches only
 - name: sbt-test-docker-bors
