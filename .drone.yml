@@ -44,8 +44,6 @@ steps:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
   image: "casperlabs/buildenv:latest"
   when:
-    changeset:
-      includes: [ **/**.scala ]
     event:
     - pull_request
 
