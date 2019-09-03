@@ -3,7 +3,7 @@ DOCKER_PUSH_LATEST ?= false
 DOCKER_LATEST_TAG ?= latest
 # Use the git tag / hash as version. Easy to pinpoint. `git tag` can return more than 1 though. `git rev-parse --short HEAD` would just be the commit.
 $(eval TAGS_OR_SHA = $(shell git tag -l --points-at HEAD | grep -e . || git describe --tags --always --long))
-# Try to use the semantic version with any leading `v` stripped.
+# Try to use the semantic version with any leading `v` stripped. Fake Commit.
 $(eval SEMVER_REGEX = 'v?\K\d+\.\d+(\.\d+)?')
 $(eval VER = $(shell echo $(TAGS_OR_SHA) | grep -oE 'v?[0-9]+(\.[0-9]){1,2}$$' | sed 's/^v//' || echo $(TAGS_OR_SHA)))
 
