@@ -63,6 +63,8 @@ steps:
       includes:
       - "**/**.scala"
       - "**/Makefile"
+  depends_on:
+  - sbt-compile-test-pr
 
 - name: rust-compile-test-pr
   environment:
