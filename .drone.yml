@@ -46,6 +46,9 @@ steps:
   when:
     event:
     - pull_request
+    changeset:
+      includes:
+      - "**/**.scala"
 
 - name: git-status-post-scala-compile-pr
   commands:
