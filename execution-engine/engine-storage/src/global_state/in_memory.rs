@@ -10,13 +10,13 @@ use engine_shared::transform::Transform;
 use crate::error::{self, in_memory};
 use crate::global_state::StateReader;
 use crate::global_state::{commit, CommitResult, History};
+use crate::store::Store;
 use crate::transaction_source::in_memory::{InMemoryEnvironment, InMemoryReadTransaction};
 use crate::transaction_source::{Transaction, TransactionSource};
 use crate::trie::operations::create_hashed_empty_trie;
 use crate::trie::Trie;
 use crate::trie_store::in_memory::InMemoryTrieStore;
 use crate::trie_store::operations::{read, write, ReadResult, WriteResult};
-use crate::trie_store::TrieStore;
 
 /// Represents a "view" of global state at a particular root hash.
 pub struct InMemoryGlobalState {
@@ -30,7 +30,7 @@ impl InMemoryGlobalState {
     /// Creates an empty state.
     pub fn empty() -> Result<Self, error::Error> {
         let environment = Arc::new(InMemoryEnvironment::new());
-        let store = Arc::new(InMemoryTrieStore::new(&environment));
+        let store = Arc::new(InMemoryTrieStore::new(&environment, None));
         let root_hash: Blake2bHash = {
             let (root_hash, root) = create_hashed_empty_trie::<Key, Value>()?;
             let mut txn = environment.create_read_write_txn()?;
