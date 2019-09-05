@@ -166,6 +166,7 @@ steps:
       - "**/**.scala"
       - "**/**.sbt"
       - "**/**.proto"
+      - "**/casperlabs-node.service"
 
 - name: git-status-post-scala-compile-bors
   commands:
@@ -181,6 +182,9 @@ steps:
       - "**/**.scala"
       - "**/**.sbt"
       - "**/**.proto"
+      - "**/casperlabs-node.service"
+  depends_on:
+  - sbt-test-docker-bors
 
 - name: rust-compile-test-bors
   environment:
@@ -246,7 +250,38 @@ steps:
   - "./integration-testing/contracts/build_contracts.sh"
   - "make docker-build/execution-engine"
   - "make docker-build/integration-testing"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock
+    path: "/var/run/docker.sock"
+  when:
+    branch:
+    - staging
+    - trying
+
+- name: docker-build-key-bors
+  commands:
+  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
   - "make docker-build/key-generator"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock
+    path: "/var/run/docker.sock"
+  when:
+    branch:
+    - staging
+    - trying
+    changeset:
+      includes:
+      - "hack/key-management/**"
+
+- name: docker-build-explorer-bors
+  commands:
+  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
   - "make docker-build/explorer"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
@@ -258,6 +293,9 @@ steps:
     branch:
     - staging
     - trying
+    changeset:
+      includes:
+      - "explorer/**"
 
 - name: docker-keys-gen-test-bors
   commands:
