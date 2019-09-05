@@ -161,12 +161,6 @@ steps:
     branch:
     - staging
     - trying
-    changeset:
-      includes:
-      - "**/**.scala"
-      - "**/**.sbt"
-      - "**/**.proto"
-      - "**/casperlabs-node.service"
 
 - name: git-status-post-scala-compile-bors
   commands:
@@ -211,6 +205,17 @@ steps:
     branch:
     - staging
     - trying
+    changeset:
+      includes:
+      - "**/**.rs"
+      - "**/**.proto"
+      - "**/Cargo.lock"
+      - "**/Cargo.toml"
+      - "**/**.spec"
+      - "**/rustfmt.toml"
+  depends_on:
+  - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: run-rust-lints-bors
   commands:
@@ -223,6 +228,17 @@ steps:
     branch:
     - staging
     - trying
+    changeset:
+      includes:
+      - "**/**.rs"
+      - "**/**.proto"
+      - "**/Cargo.lock"
+      - "**/Cargo.toml"
+      - "**/**.spec"
+      - "**/rustfmt.toml"
+  depends_on:
+  - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: try-cargo-publish-bors
   commands:
@@ -233,6 +249,17 @@ steps:
     branch:
     - staging
     - trying
+    changeset:
+      includes:
+      - "**/**.rs"
+      - "**/**.proto"
+      - "**/Cargo.lock"
+      - "**/Cargo.toml"
+      - "**/**.spec"
+      - "**/rustfmt.toml"
+  depends_on:
+  - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: run-rust-benchmarks-bors
   commands:
@@ -243,6 +270,17 @@ steps:
     branch:
     - staging
     - trying
+    changeset:
+      includes:
+      - "**/**.rs"
+      - "**/**.proto"
+      - "**/Cargo.lock"
+      - "**/Cargo.toml"
+      - "**/**.spec"
+      - "**/rustfmt.toml"
+  depends_on:
+  - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: docker-build-ee-int-bors
   commands:
@@ -260,6 +298,9 @@ steps:
     branch:
     - staging
     - trying
+  depends_on:
+  - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: docker-build-key-bors
   commands:
@@ -312,6 +353,11 @@ steps:
     branch:
     - staging
     - trying
+    changeset:
+      includes:
+      - "hack/key-management/**"
+  depends_on:
+  - docker-build-key-bors
 
 - name: run-integration-tests
   commands:
