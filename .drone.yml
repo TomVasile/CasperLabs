@@ -181,8 +181,6 @@ steps:
       - "**/**.scala"
       - "**/**.sbt"
       - "**/**.proto"
-  depends_on:
-  - sbt-compile-test-bors
 
 - name: rust-compile-test-bors
   environment:
