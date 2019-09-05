@@ -326,8 +326,6 @@ steps:
     branch:
     - staging
     - trying
-  depends_on:
-  - sbt-docker-bors
 
 - name: docker-build-key-bors
   commands:
