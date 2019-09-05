@@ -9,7 +9,7 @@ Global / conflictManager := ConflictManager.strict
 //resolve all version conflicts explicitly
 Global / dependencyOverrides := Dependencies.overrides
 
-// Keeping all the .proto definitions in a common place so we can use `include` to factor out common messages.
+// Keeping all the .proto definitions in a common place so we can use `include` to factor out common messages. TEST
 val protobufDirectory = file("protobuf")
 // Protos can import any other using the full path within `protobuf`. This filter reduces the list
 // for which we actually generate .scala source, so we don't get duplicates between projects.
