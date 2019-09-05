@@ -49,7 +49,9 @@ steps:
     changeset:
       includes:
       - "**/**.scala"
-      - "**/Makefile"
+      - "**/**.sbt"
+      - "**/**.proto"
+      - "**/casperlabs-node.service"
 
 - name: git-status-post-scala-compile-pr
   commands:
@@ -62,7 +64,9 @@ steps:
     changeset:
       includes:
       - "**/**.scala"
-      - "**/Makefile"
+      - "**/**.sbt"
+      - "**/**.proto"
+      - "**/casperlabs-node.service"
   depends_on:
   - sbt-compile-test-pr
 
@@ -81,8 +85,12 @@ steps:
     changeset:
       includes:
       - "**/**.rs"
-      - "**/Makefile"
-
+      - "**/**.proto"
+      - "**/Cargo.lock"
+      - "**/Cargo.toml"
+      - "**/casperlabs-engine-grpc-server.spec"
+      - "**/rustfmt.toml
+      
 - name: run-cargo-fmt-pr
   commands:
   - "cd execution-engine"
@@ -96,7 +104,11 @@ steps:
     changeset:
       includes:
       - "**/**.rs"
-      - "**/Makefile"
+      - "**/**.proto"
+      - "**/Cargo.lock"
+      - "**/Cargo.toml"
+      - "**/**.spec"
+      - "**/rustfmt.toml
   depends_on:
   - rust-compile-test-pr
 
@@ -113,7 +125,11 @@ steps:
     changeset:
       includes:
       - "**/**.rs"
-      - "**/Makefile"
+      - "**/**.proto"
+      - "**/Cargo.lock"
+      - "**/Cargo.toml"
+      - "**/**.spec"
+      - "**/rustfmt.toml
   depends_on:
   - rust-compile-test-pr
 
@@ -145,6 +161,11 @@ steps:
     branch:
     - staging
     - trying
+    changeset:
+      includes:
+      - "**/**.scala"
+      - "**/**.sbt"
+      - "**/**.proto"
 
 - name: git-status-post-scala-compile-bors
   commands:
@@ -155,6 +176,13 @@ steps:
     branch:
     - staging
     - trying
+    changeset:
+      includes:
+      - "**/**.scala"
+      - "**/**.sbt"
+      - "**/**.proto"
+  depends_on:
+  - sbt-compile-test-bors
 
 - name: rust-compile-test-bors
   environment:
