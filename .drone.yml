@@ -161,26 +161,6 @@ steps:
     branch:
     - staging
     - trying
-    changeset:
-      includes:
-      - "**/**.scala"
-      - "**/**.sbt"
-      - "**/**.proto"
-      - "**/casperlabs-node.service"
-
-- name: sbt-docker-bors
-  commands:
-  - "make docker-build/node docker-build/client"
-  environment:
-    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock
-    path: "/var/run/docker.sock"
-  when:
-    branch:
-    - staging
-    - trying
 
 - name: git-status-post-scala-compile-bors
   commands:
@@ -211,14 +191,6 @@ steps:
     branch:
     - staging
     - trying
-    changeset:
-      includes:
-      - "**/**.rs"
-      - "**/**.proto"
-      - "**/Cargo.lock"
-      - "**/Cargo.toml"
-      - "**/**.spec"
-      - "**/rustfmt.toml"
 
 # Note: Added the dependency on the sbt step to be finished first because in testing,
 # Drone was getting random sbt build failures when too many steps were running simultaneously.
@@ -326,6 +298,9 @@ steps:
     branch:
     - staging
     - trying
+  depends_on:
+  - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: docker-build-key-bors
   commands:
