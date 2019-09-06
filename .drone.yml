@@ -354,8 +354,7 @@ steps:
       - "**/.drone.yml"
       - "explorer/**"
   depends_on:
-  - rust-compile-test-bors
-  - sbt-test-docker-bors
+  - docker-build-ee-int-bors
 
 - name: docker-keys-gen-test-bors
   commands:
