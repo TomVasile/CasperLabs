@@ -14,7 +14,7 @@ See instructions [here](https://github.com/CasperLabs/contract-examples/blob/mas
 
 ## Required: docker-compose
 
-`docker-compose` is used to bring up the nodes on the network. Please verify that [docker-compose is installed](https://docs.docker.com/compose/install/) prior to continuing.
+`docker-compose` is used to bring up the nodes on the network. Please verify that [docker-compose is installed](https://docs.docker.com/compose/install/) prior to continuing test.
 
 ## Required: OpenSSL 1.1
 
