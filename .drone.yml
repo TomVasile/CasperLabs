@@ -48,6 +48,7 @@ steps:
     - pull_request
     changeset:
       includes:
+      - "**/.drone.yml"
       - "**/**.scala"
       - "**/**.sbt"
       - "**/**.proto"
@@ -63,6 +64,7 @@ steps:
     - pull_request
     changeset:
       includes:
+      - "**/.drone.yml"
       - "**/**.scala"
       - "**/**.sbt"
       - "**/**.proto"
@@ -84,6 +86,7 @@ steps:
     - pull_request
     changeset:
       includes:
+      - "**/.drone.yml"
       - "**/**.rs"
       - "**/**.proto"
       - "**/Cargo.lock"
@@ -103,6 +106,7 @@ steps:
     - pull_request
     changeset:
       includes:
+      - "**/.drone.yml"
       - "**/**.rs"
       - "**/**.proto"
       - "**/Cargo.lock"
@@ -124,6 +128,7 @@ steps:
     - pull_request
     changeset:
       includes:
+      - "**/.drone.yml"
       - "**/**.rs"
       - "**/**.proto"
       - "**/Cargo.lock"
@@ -144,6 +149,7 @@ steps:
     - pull_request
     changeset:
       includes:
+      - "**/.drone.yml"
       - "integration-testing/**"
 
 # This section is for bors' branches only
@@ -173,6 +179,7 @@ steps:
     - trying
     changeset:
       includes:
+      - "**/.drone.yml"
       - "**/**.scala"
       - "**/**.sbt"
       - "**/**.proto"
@@ -207,6 +214,7 @@ steps:
     - trying
     changeset:
       includes:
+      - "**/.drone.yml"
       - "**/**.rs"
       - "**/**.proto"
       - "**/Cargo.lock"
@@ -230,6 +238,7 @@ steps:
     - trying
     changeset:
       includes:
+      - "**/.drone.yml"
       - "**/**.rs"
       - "**/**.proto"
       - "**/Cargo.lock"
@@ -251,6 +260,7 @@ steps:
     - trying
     changeset:
       includes:
+      - "**/.drone.yml"
       - "**/**.rs"
       - "**/**.proto"
       - "**/Cargo.lock"
@@ -272,6 +282,7 @@ steps:
     - trying
     changeset:
       includes:
+      - "**/.drone.yml"
       - "**/**.rs"
       - "**/**.proto"
       - "**/Cargo.lock"
@@ -318,6 +329,7 @@ steps:
     - trying
     changeset:
       includes:
+      - "**/.drone.yml"
       - "hack/key-management/**"
   depends_on:
   - rust-compile-test-bors
@@ -339,6 +351,7 @@ steps:
     - trying
     changeset:
       includes:
+      - "**/.drone.yml"
       - "explorer/**"
   depends_on:
   - rust-compile-test-bors
@@ -361,6 +374,7 @@ steps:
     - trying
     changeset:
       includes:
+      - "**/.drone.yml"
       - "hack/key-management/**"
   depends_on:
   - docker-build-key-bors
