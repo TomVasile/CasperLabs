@@ -481,6 +481,12 @@ steps:
     - master
     event:
     - push
+  depends_on:
+  - rust-compile-for-make
+  - docker-build-ee-merge
+  - docker-key-gen-merge
+  - docker-explorer-merge
+  - docker-grpcwebproxy-merge
 
 - name: package-sbt-artifacts-merge
   commands:
@@ -504,6 +510,8 @@ steps:
     - master
     event:
     - push
+  depends_on:
+  - make-clean-before-package
 
 - name: package-ee
   commands:
@@ -521,6 +529,8 @@ steps:
     - master
     event:
     - push
+  depends_on:
+  - make-clean-before-package
 
 - name: rsync-artifacts
   image: drillster/drone-rsync
@@ -547,6 +557,9 @@ steps:
     - master
     event:
     - push
+  depends_on:
+  - package-sbt-artifacts-merge
+  - package-ee
 
 - name: docker-publish
   commands:
@@ -600,8 +613,35 @@ steps:
     - master
     event:
     - push
+  depends_on:
+  - docker-build-ee-merge
+  - docker-key-gen-merge
+  - docker-explorer-merge
+  - docker-grpcwebproxy-merge
+  - package-sbt-artifacts-merge
 
 - name: contract-examples
+  image: plugins/downstream
+  settings:
+    fork: true
+    repositories:
+    - "CasperLabs/contract-examples@master"
+  environment:
+    DOWNSTREAM_SERVER:
+      from_secret: downstream_server
+    DOWNSTREAM_TOKEN:
+      from_secret: downstream_token
+  when:
+    branch:
+    - dev
+    - "release-*"
+    - master
+    event:
+    - push
+  depends_on:
+  - rsync-artifacts
+  - docker-publish
+
   image: plugins/downstream
   settings:
     fork: true
