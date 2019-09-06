@@ -319,6 +319,9 @@ steps:
     changeset:
       includes:
       - "hack/key-management/**"
+  depends_on:
+  - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: docker-build-explorer-bors
   commands:
@@ -337,6 +340,9 @@ steps:
     changeset:
       includes:
       - "explorer/**"
+  depends_on:
+  - rust-compile-test-bors
+  - sbt-test-docker-bors
 
 - name: docker-keys-gen-test-bors
   commands:
