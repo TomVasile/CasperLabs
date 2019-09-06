@@ -318,7 +318,7 @@ steps:
     - trying
     changeset:
       includes:
-      - "key-management/**"
+      - "hack/key-management/**"
 
 - name: docker-build-explorer-bors
   commands:

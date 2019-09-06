@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 set -e
-
+#test
 $(dirname $0)/docker-gen-keys.sh "$1"
 cd "$1"
 rm node*
