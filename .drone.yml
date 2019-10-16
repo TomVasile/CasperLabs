@@ -878,7 +878,7 @@ steps:
   - mkdir -p ~/.ssh
   - mkdir -p artifacts/
   - umask 077 && echo "$MAC-SSH-KEY" > ~/.ssh/id_ed25519
-  - rsync -avzhe "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" $MAC-USER@$MAC-HOST:DRONE_BUILD_${DRONE_BUILD_NUMBER}/CasperLabs/execution-engine/target/release/casperlabs-engine-grpc-server-*darwin*.tar.gz artifacts/${DRONE_BRANCH}/
+  - rsync -avzhe "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" "$MAC-USER"@"$MAC-HOST":DRONE_BUILD_${DRONE_BUILD_NUMBER}/CasperLabs/execution-engine/target/release/casperlabs-engine-grpc-server-*darwin*.tar.gz artifacts/${DRONE_BRANCH}/
   when:
     ref:
     - refs/tags/v*
