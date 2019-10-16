@@ -853,8 +853,7 @@ steps:
     - cd DRONE_BUILD_${DRONE_BUILD_NUMBER}
     - git clone -b master https://github.com/CasperLabs/CasperLabs.git
     - export PATH=$PATH:/usr/local/bin/
-    - cd DRONE_BUILD_${DRONE_BUILD_NUMBER}/CasperLabs
-    - cd execution-engine
+    - cd CasperLabs/execution-engine
     - make setup
     - make build
     - cd target/release/
