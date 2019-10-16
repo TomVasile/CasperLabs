@@ -860,7 +860,7 @@ steps:
     - export OS=$(uname -s | tr '[:upper:]' '[:lower:]')
     - export ARCH=$(uname -p)
     - export VERSION=$(./casperlabs-engine-grpc-server --version | awk '{print $NF}')
-    - tar -czvf casperlabs-engine-grpc-server_"$VERSION"_"$OS"_"$ARCH".tar.gz casperlabs-engine-grpc-server
+    - tar -czvf casperlabs-engine-grpc-server-"$VERSION"_"$OS"_"$ARCH".tar.gz casperlabs-engine-grpc-server
   when:
     ref:
     - refs/tags/v*
