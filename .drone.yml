@@ -855,7 +855,7 @@ steps:
     - export PATH=$PATH:/usr/local/bin/
     - cd CasperLabs/execution-engine
     - make setup
-    - make build
+    - CARGO_FLAGS=--release make build
     - cd target/release/
     - export OS=$(uname -s | tr '[:upper:]' '[:lower:]')
     - export ARCH=$(uname -p)
