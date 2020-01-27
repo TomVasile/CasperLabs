@@ -1,20 +1,21 @@
-use std::collections::HashMap;
+use engine_test_support::low_level::{
+    ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG,
+};
 
-use crate::support::test_support::{WasmTestBuilder, DEFAULT_BLOCK_TIME};
-
-const GENESIS_ADDR: [u8; 32] = [6u8; 32];
+const CONTRACT_EE_549_REGRESSION: &str = "ee_549_regression.wasm";
 
 #[ignore]
 #[test]
 fn should_run_ee_549_set_refund_regression() {
-    let mut builder = WasmTestBuilder::default();
+    let exec_request =
+        ExecuteRequestBuilder::standard(DEFAULT_ACCOUNT_ADDR, CONTRACT_EE_549_REGRESSION, ())
+            .build();
 
-    builder.run_genesis(GENESIS_ADDR, HashMap::new()).exec(
-        GENESIS_ADDR,
-        "ee_549_regression.wasm",
-        DEFAULT_BLOCK_TIME,
-        1,
-    );
+    let mut builder = InMemoryWasmTestBuilder::default();
+
+    builder
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request);
 
     // Execution should encounter an error because set_refund
     // is not allowed to be called during session execution.

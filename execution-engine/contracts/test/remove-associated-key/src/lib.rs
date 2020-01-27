@@ -1,17 +1,15 @@
 #![no_std]
-#![feature(cell_update)]
 
-extern crate alloc;
-extern crate contract_ffi;
-
-use contract_ffi::contract_api;
-use contract_ffi::value::account::PublicKey;
-
-const REMOVE_FAIL: u32 = 1;
+use contract::{
+    contract_api::{account, runtime},
+    unwrap_or_revert::UnwrapOrRevert,
+};
+use types::{account::PublicKey, ApiError};
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let account: PublicKey = contract_api::get_arg(0);
-    contract_api::remove_associated_key(account)
-        .unwrap_or_else(|_| contract_api::revert(REMOVE_FAIL));
+    let account: PublicKey = runtime::get_arg(0)
+        .unwrap_or_revert_with(ApiError::MissingArgument)
+        .unwrap_or_revert_with(ApiError::InvalidArgument);
+    account::remove_associated_key(account).unwrap_or_revert_with(ApiError::User(0))
 }

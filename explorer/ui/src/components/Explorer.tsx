@@ -1,30 +1,41 @@
 import React from 'react';
 import { observer } from 'mobx-react';
-import DagContainer from '../containers/DagContainer';
 import {
-  RefreshableComponent,
   LinkButton,
   ListInline,
+  RefreshableComponent,
   shortHash
 } from './Utils';
 import { BlockDAG } from './BlockDAG';
 import DataTable from './DataTable';
-import { encodeBase16 } from '../lib/Conversions';
-import { BlockInfo } from '../grpc/io/casperlabs/casper/consensus/info_pb';
+import { BlockInfo } from 'casperlabs-grpc/io/casperlabs/casper/consensus/info_pb';
 import $ from 'jquery';
-import { DagStepButtons } from './BlockList';
-import { Link } from 'react-router-dom';
+import { DagStepButtons, Props } from './BlockList';
+import { Link, withRouter } from 'react-router-dom';
 import Pages from './Pages';
-
-interface Props {
-  dag: DagContainer;
-}
+import { encodeBase16 } from 'casperlabs-sdk';
+import { BondedValidatorsTable } from './BondedValidatorsTable';
+import { ToggleButton } from './ToggleButton';
 
 /** Show the tips of the DAG. */
 @observer
-export default class Explorer extends RefreshableComponent<Props, {}> {
+class _Explorer extends RefreshableComponent<Props, {}> {
+  constructor(props:Props) {
+    super(props);
+    let maxRank = parseInt(props.maxRank || '') || 0;
+    let depth = parseInt(props.depth || '') || 10;
+    this.props.dag.updateMaxRankAndDepth(maxRank, depth);
+    this.props.dag.refreshBlockDagAndSetupSubscriber();
+  }
+
   async refresh() {
-    this.props.dag.refreshBlockDag();
+    await this.props.dag.refreshBlockDagAndSetupSubscriber();
+  }
+
+  componentWillUnmount() {
+    super.componentWillUnmount();
+    // release websocket if necessary
+    this.props.dag.unsubscribe();
   }
 
   render() {
@@ -35,17 +46,29 @@ export default class Explorer extends RefreshableComponent<Props, {}> {
           <div className={`col-sm-12 col-lg-${dag.selectedBlock ? 8 : 12}`}>
             <BlockDAG
               title={
-                dag.maxRank === 0
+                dag.isLatestDag
                   ? 'Latest Block DAG'
                   : `Block DAG from rank ${dag.minRank} to ${dag.maxRank}`
               }
               blocks={dag.blocks}
               refresh={() => this.refresh()}
+              subscribeToggleStore={dag.subscribeToggleStore}
               footerMessage={
                 <ListInline>
-                  <DagStepButtons step={dag.step} />
+                  <DagStepButtons
+                    step={dag.step}
+                    history={this.props.history}
+                    urlWithRankAndDepth={Pages.explorerWithMaxRankAndDepth}
+                  />
                   {dag.hasBlocks && (
                     <span>Select a block to see its details.</span>
+                  )}
+                  {dag.selectedBlock && (
+                    <ToggleButton
+                      title={'Show bonded validators'}
+                      toggleStore={dag.validatorsListToggleStore}
+                      size="sm"
+                    />
                   )}
                 </ListInline>
               }
@@ -77,12 +100,16 @@ export default class Explorer extends RefreshableComponent<Props, {}> {
                 block={dag.selectedBlock}
                 blocks={dag.blocks!}
                 onSelect={blockHashBase16 => {
-                  dag.selectedBlock = dag.blocks!.find(
-                    x =>
-                      encodeBase16(x.getSummary()!.getBlockHash_asU8()) ===
-                      blockHashBase16
-                  );
+                  dag.selectByBlockHashBase16(blockHashBase16);
                 }}
+              />
+            </div>
+          )}
+          {dag.selectedBlock && dag.validatorsListToggleStore.isPressed && (
+            <div className="col-sm-12">
+              <BondedValidatorsTable
+                block={dag.selectedBlock}
+                lastFinalizedBlock={dag.lastFinalizedBlock}
               />
             </div>
           )}
@@ -92,11 +119,17 @@ export default class Explorer extends RefreshableComponent<Props, {}> {
   }
 }
 
-class BlockDetails extends React.Component<{
-  block: BlockInfo;
-  blocks: BlockInfo[];
-  onSelect: (blockHash: string) => void;
-}> {
+const Explorer = withRouter(_Explorer);
+export default Explorer;
+
+class BlockDetails extends React.Component<
+  {
+    block: BlockInfo;
+    blocks: BlockInfo[];
+    onSelect: (blockHash: string) => void;
+  },
+  {}
+> {
   ref: HTMLElement | null = null;
 
   render() {
@@ -167,7 +200,11 @@ class BlockDetails extends React.Component<{
               );
             // Genesis doesn't have a validator.
             return (
-              (validatorBond && validatorBond.getStake().toLocaleString()) ||
+              (validatorBond &&
+                validatorBond.getStake() &&
+                Number(
+                  validatorBond.getStake()!.getValue()
+                ).toLocaleString()) ||
               null
             );
           })()

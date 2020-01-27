@@ -1,13 +1,14 @@
 #![no_std]
 
 extern crate alloc;
-extern crate contract_ffi;
 
 use alloc::string::String;
-use contract_ffi::contract_api;
+
+use contract::contract_api::{runtime, storage};
+use types::ApiError;
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let _ = contract_api::new_uref(String::from("Hello, World!"));
-    contract_api::revert(999)
+    let _ = storage::new_turef(String::from("Hello, World!"));
+    runtime::revert(ApiError::User(999))
 }

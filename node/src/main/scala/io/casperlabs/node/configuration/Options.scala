@@ -1,17 +1,17 @@
 package io.casperlabs.node.configuration
 
+/////// WARNING! Do not clean this imports, they needed for @scallop macro
 import java.nio.file.Path
 
-import cats.Show
-import cats.syntax.either._
-import cats.syntax.option._
+import cats._
+import cats.implicits._
 import com.github.ghik.silencer.silent
-import io.casperlabs.comm.discovery.Node
+import io.casperlabs.comm.discovery.NodeUtils.NodeWithoutChainId
 import io.casperlabs.configuration.cli.scallop
 import io.casperlabs.node.BuildInfo
 import io.casperlabs.node.configuration.Utils._
+import izumi.logstage.api.{Log => IzLog}
 import org.rogach.scallop._
-
 import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
 import scala.io.Source
@@ -20,17 +20,17 @@ import scala.language.implicitConversions
 private[configuration] object Converter extends ParserImplicits {
   import Options._
 
-  implicit val bootstrapAddressConverter: ValueConverter[Node] = new ValueConverter[Node] {
-    def parse(s: List[(String, List[String])]): Either[String, Option[Node]] =
-      s match {
-        case (_, uri :: Nil) :: Nil =>
-          Parser[Node].parse(uri).map(_.some)
-        case Nil => Right(None)
-        case _   => Left("provide the casperlabs node bootstrap address")
+  implicit val bootstrapAddressConverter: ValueConverter[List[NodeWithoutChainId]] =
+    new ValueConverter[List[NodeWithoutChainId]] {
+      def parse(
+          s: List[(String, List[String])]
+      ): Either[String, Option[List[NodeWithoutChainId]]] = {
+        val all = s.unzip._2.flatten.mkString(" ")
+        Parser[List[NodeWithoutChainId]].parse(all).map(Option(_).filterNot(_.isEmpty))
       }
 
-    val argType: ArgType.V = ArgType.SINGLE
-  }
+      val argType: ArgType.V = ArgType.LIST
+    }
 
   implicit val optionsFlagConverter: ValueConverter[Flag] = new ValueConverter[Flag] {
     def parse(s: List[(String, List[String])]): Either[String, Option[Flag]] =
@@ -52,6 +52,9 @@ private[configuration] object Converter extends ParserImplicits {
 
       override val argType: ArgType.V = ArgType.SINGLE
     }
+
+  implicit val logLevelConverter: ValueConverter[IzLog.Level] =
+    singleArgConverter(lvl => IzLog.Level.parse(lvl))
 }
 
 private[configuration] object Options {
@@ -79,6 +82,10 @@ private[configuration] final case class Options private (
   import io.casperlabs.comm.discovery.NodeUtils
   import Options.Flag
 
+  //Used in @scallop macro when it puts things into `field`
+  private implicit def showList[T: Show]: Show[List[T]] = xs => xs.map(_.show).mkString(" ")
+  @silent("is never used")
+  private implicit val showNodeList = showList[NodeWithoutChainId]
   //Used in @scallop macro
   @silent("is never used")
   private implicit def show[T: NotNode]: Show[T] = Show.show(_.toString)
@@ -97,7 +104,9 @@ private[configuration] final case class Options private (
 
   def fieldByName(fieldName: CamelCase): Option[String] =
     subcommand
-      .flatMap(command => fields.get((command, fieldName)).flatMap(_.apply().toOption))
+      .flatMap(
+        command => fields.get((command, fieldName)).flatMap { _.apply().toOption }
+      )
 
   def parseCommand: Either[String, Configuration.Command] =
     subcommand.fold(s"Command was not provided".asLeft[Configuration.Command]) {
@@ -115,12 +124,14 @@ private[configuration] final case class Options private (
 
   val configFile = opt[Path](descr = "Path to the TOML configuration file.")
 
-  version(s"CasperLabs Node ${BuildInfo.version}")
+  version(
+    s"CasperLabs Node ${BuildInfo.version} (${BuildInfo.gitHeadCommit.getOrElse("commit # unknown")})"
+  )
   printedName = "casperlabs"
   banner(
     """
       |Configuration file --config-file can contain tables
-      |[server], [grpc], [lmdb], [casper], [tls], [metrics], [influx] and [blockstorage].
+      |[server], [grpc], [casper], [tls], [metrics], [influx] and [blockstorage].
       |
       |CLI options match TOML keys and environment variables, example:
       |    --[prefix]-[key-name]=value e.g. --server-data-dir=/casperlabs
@@ -164,6 +175,14 @@ private[configuration] final case class Options private (
     helpWidth(120)
 
     @scallop
+    val logLevel =
+      gen[IzLog.Level]("Log level, e.g. DEBUG, INFO, WARN, ERROR.")
+
+    @scallop
+    val logJsonPath =
+      gen[Path]("Optionally print logs to a file in JSON format.")
+
+    @scallop
     val grpcPortExternal =
       gen[Int]("Port used for external gRPC API, e.g. deployments.")
 
@@ -176,8 +195,16 @@ private[configuration] final case class Options private (
       gen[Int]("Maximum size of message that can be sent via transport layer.")
 
     @scallop
+    val serverEngineParallelism =
+      gen[Int]("Target parallelism for execution engine requests.")
+
+    @scallop
     val serverChunkSize =
       gen[Int]("Size of chunks to split larger payloads into when streamed via transport layer.")
+
+    @scallop
+    val serverEventStreamBufferSize =
+      gen[Int]("Size of the buffer to store emitted block events")
 
     @scallop
     val grpcPortInternal =
@@ -216,9 +243,15 @@ private[configuration] final case class Options private (
       )
 
     @scallop
-    val tlsSecureRandomNonBlocking =
-      gen[Flag](
-        "Use a non blocking secure random instance."
+    val tlsApiCertificate =
+      gen[Path](
+        "Path to an optional X.509 certificate file signed by a trusted root CA, to be used in the with public API."
+      )
+
+    @scallop
+    val tlsApiKey =
+      gen[Path](
+        "Path to the unencrypted secp256r1 PKCS#8 private key file corresponding to the API certificate, if given."
       )
 
     @scallop
@@ -236,60 +269,16 @@ private[configuration] final case class Options private (
       )
 
     @scallop
-    val casperNumValidators =
-      gen[Int](
-        "Amount of random validator keys to generate at genesis if no `bonds.txt` file is present."
-      )
-
-    @scallop
-    val casperBondsFile =
-      gen[Path](
-        "Path to plain text file consisting of lines of the form `<pk> <stake>`, " +
-          "which defines the bond amounts for each validator at genesis. " +
-          "<pk> is the public key (in base-64 encoding) identifying the validator and <stake>" +
-          s"is the amount of CSPR they have bonded (an integer). Note: this overrides the --num-validators option."
-      )
-    @scallop
     val casperKnownValidatorsFile =
       gen[Path](
         "Path to plain text file listing the public keys of validators known to the user (one per line). " +
           "Signatures from these validators are required in order to accept a block which starts the local" +
           s"node's view of the DAG."
       )
-    @scallop
-    val casperWalletsFile =
-      gen[Path](
-        "Path to plain text file consisting of lines of the form `<algorithm> <pk> <revBalance>`, " +
-          "which defines the CSPR wallets that exist at genesis. " +
-          "<algorithm> is the algorithm used to verify signatures when using the wallet (currently supported value is only ed25519)," +
-          "<pk> is the public key (in base-64 encoding) identifying the wallet and <revBalance>" +
-          s"is the amount of CSPR in the wallet."
-      )
-    @scallop
-    val casperMinimumBond =
-      gen[Long]("Minimum bond accepted by the PoS contract in the genesis block.")
 
     @scallop
-    val casperMaximumBond =
-      gen[Long]("Maximum bond accepted by the PoS contract in the genesis block.")
-
-    @scallop
-    val casperGenesisAccountPublicKeyPath =
-      gen[Path]("Path to the PEM encoded public key to use for the system account.")
-
-    @scallop
-    val casperInitialMotes =
-      gen[BigInt](
-        "Initial number of motes to pass to the Mint contract. Note: a mote is the smallest, indivisible unit of a token."
-      )
-
-    @scallop
-    val casperMintCodePath =
-      gen[Path]("Path to the Wasm file which contains the Mint contract.")
-
-    @scallop
-    val casperPosCodePath =
-      gen[Path]("Path to the Wasm file which contains the Proof-of-Stake contract")
+    val casperChainSpecPath =
+      gen[Path]("Path to the directory which contains the Chain Spec.")
 
     @scallop
     val casperAutoProposeEnabled =
@@ -298,13 +287,16 @@ private[configuration] final case class Options private (
     @scallop
     val casperAutoProposeCheckInterval =
       gen[FiniteDuration]("Time between proposal checks.")
+    @scallop
+    val casperAutoProposeBallotInterval =
+      gen[FiniteDuration]("Maximum time to allow before trying to propose a ballot or block.")
 
     @scallop
-    val casperAutoProposeMaxInterval =
+    val casperAutoProposeAccInterval =
       gen[FiniteDuration]("Time to accumulate deploys before proposing.")
 
     @scallop
-    val casperAutoProposeMaxCount =
+    val casperAutoProposeAccCount =
       gen[Int]("Number of deploys to accumulate before proposing.")
 
     @scallop
@@ -313,18 +305,14 @@ private[configuration] final case class Options private (
 
     @scallop
     val serverBootstrap =
-      gen[Node](
-        "Bootstrap casperlabs node address for initial seed.",
+      gen[List[NodeWithoutChainId]](
+        "Bootstrap casperlabs node address for initial seed. Accepts multiple instances for redundancy.",
         'b'
       )
 
     @scallop
     val serverCleanBlockStorage =
       gen[Flag]("Use this flag to clear the blockStorage and dagStorage")
-
-    @scallop
-    val serverUseGossiping =
-      gen[Flag]("Use the gossiping, not the old transport layer.")
 
     @scallop
     val serverRelayFactor =
@@ -344,6 +332,12 @@ private[configuration] final case class Options private (
     val serverApprovalPollInterval =
       gen[FiniteDuration](
         "Time to wait between asking the bootstrap node for an updated list of genesis approvals."
+      )
+
+    @scallop
+    val serverAlivePeersCacheExpirationPeriod =
+      gen[FiniteDuration](
+        "Time to cache live peers for and to ban unresponsive ones."
       )
 
     @scallop
@@ -391,8 +385,18 @@ private[configuration] final case class Options private (
       gen[Int]("Maximum number of blocks to allow to be synced initially.")
 
     @scallop
+    val serverInitSyncStep =
+      gen[Int](
+        "Depth of DAG slices (by rank) retrieved slice-by-slice until node fully synchronized."
+      )
+
+    @scallop
     val serverInitSyncRoundPeriod =
       gen[FiniteDuration]("Time to wait between initial synchronization attempts.")
+
+    @scallop
+    val serverPeriodicSyncRoundPeriod =
+      gen[FiniteDuration]("Time to wait between periodic synchronization attempts.")
 
     @scallop
     val serverDownloadMaxParallelBlocks =
@@ -420,6 +424,7 @@ private[configuration] final case class Options private (
     @scallop
     val serverRelayBlockChunkConsumerTimeout =
       gen[FiniteDuration]("Maximum time to allow a peer downloading a block to consume each chunk.")
+
     @scallop
     val casperStandalone =
       gen[Flag](
@@ -434,28 +439,6 @@ private[configuration] final case class Options private (
       )
 
     @scallop
-    val casperDeployTimestamp =
-      gen[Long]("Timestamp for the deploys.")
-
-    @scallop
-    val casperApproveGenesisDuration =
-      gen[FiniteDuration](
-        "Time window in which BlockApproval messages will be accumulated before checking conditions.",
-        'd'
-      )
-
-    @scallop
-    val casperApproveGenesisInterval =
-      gen[FiniteDuration](
-        "Interval at which condition for creating ApprovedBlock will be checked.",
-        'i'
-      )
-
-    @scallop
-    val casperApproveGenesis =
-      gen[Flag]("Start a node as a genesis validator.")
-
-    @scallop
     val serverHost =
       gen[String]("Hostname or IP of this node.")
 
@@ -468,28 +451,45 @@ private[configuration] final case class Options private (
       gen[Int]("Maximum number of peers allowed to connect to the node.")
 
     @scallop
-    val lmdbBlockStorageSize =
-      gen[Long]("Casper BlockStorage map size (in bytes).")
+    val serverBlockUploadRateMaxRequests = gen[Int](
+      "Maximum number of block download requests per peer in period (see below), " +
+        "if 0 then rate limiting will be disabled."
+    )
 
     @scallop
-    val lmdbMaxDbs =
-      gen[Int]("LMDB max databases.")
+    val serverBlockUploadRatePeriod = gen[FiniteDuration](
+      "Time window to apply rate limiting (see above), " +
+        "if 0 then rate limiting will be disabled."
+    )
 
     @scallop
-    val lmdbMaxReaders =
-      gen[Int]("LMDB max readers.")
+    val serverBlockUploadRateMaxThrottled = gen[Int](
+      "Maximum number of in-flight throttled block download requests per peer, " +
+        "if 0 then unlimited, if reached max size then peer will receive RESOURCE_EXHAUSTED response."
+    )
 
     @scallop
-    val lmdbUseTls =
-      gen[Flag]("LMDB use TLS.")
-
-    @scallop
-    val blockstorageLatestMessagesLogMaxSizeFactor =
-      gen[Int]("Size factor for squashing block storage latest messages.")
+    val casperMinTtl = gen[FiniteDuration](
+      "Minimum deploy TTL value."
+    )
 
     @scallop
     val blockstorageCacheMaxSizeBytes =
-      gen[Long]("Maximum size of the in-memory block cache in bytes.")
+      gen[Long]("Maximum size of each of in-memory block/dag/justifications caches in bytes.")
+
+    @scallop
+    val blockstorageCacheNeighborhoodBefore =
+      gen[Int]("How far to go to the past (by ranks) for caching neighborhood of looked up block")
+
+    @scallop
+    val blockstorageCacheNeighborhoodAfter = gen[Int](
+      "How far to go to the future (by ranks) for caching neighborhood of looked up block"
+    )
+
+    @scallop
+    val blockstorageDeployStreamChunkSize = gen[Int](
+      "How many records to pull from the DB in a chunk of a stream."
+    )
 
     @scallop
     val casperValidatorPublicKey =
@@ -525,10 +525,6 @@ private[configuration] final case class Options private (
         "Name of the algorithm to use for signing proposed blocks. " +
           s"Currently supported values: ed25519."
       )
-
-    @scallop
-    val casperShardId =
-      gen[String](s"Identifier of the shard this node is connected to.")
 
     @scallop
     val metricsPrometheus =

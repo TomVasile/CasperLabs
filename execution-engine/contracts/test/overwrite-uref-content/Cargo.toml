@@ -1,0 +1,18 @@
+[package]
+name = "overwrite-uref-content"
+version = "0.1.0"
+authors = ["Michał Papierski <michal@papierski.net>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+bench = false
+doctest = false
+test = false
+
+[features]
+std = ["contract/std", "types/std"]
+
+[dependencies]
+contract = { path = "../../../contract", package = "casperlabs-contract" }
+types = { path = "../../../types", package = "casperlabs-types" }

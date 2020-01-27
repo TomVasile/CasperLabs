@@ -1,24 +1,27 @@
 package io.casperlabs.comm.gossiping
 
-import cats.Monad
+import cats._
+import cats.syntax._
 import cats.effect._
 import cats.effect.concurrent._
+import cats.effect.implicits._
 import cats.implicits._
 import com.google.protobuf.ByteString
 import eu.timepit.refined._
 import eu.timepit.refined.api.Refined
 import eu.timepit.refined.auto._
 import eu.timepit.refined.numeric._
+import io.casperlabs.models.BlockImplicits._
 import io.casperlabs.casper.consensus.{Block, BlockSummary}
+import io.casperlabs.catscontrib.MonadThrowable
 import io.casperlabs.comm.GossipError
 import io.casperlabs.comm.discovery.Node
 import io.casperlabs.comm.discovery.NodeUtils.showNode
 import io.casperlabs.comm.gossiping.DownloadManagerImpl.RetriesConf
 import io.casperlabs.comm.gossiping.Utils._
 import io.casperlabs.metrics.Metrics
-import io.casperlabs.shared.{Compression, Log}
-import shapeless.tag
-import shapeless.tag.@@
+import io.casperlabs.shared.{Compression, FatalErrorShutdown, Log}
+import io.casperlabs.shared.Log.LogOps
 
 import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.util.control.NonFatal
@@ -36,12 +39,15 @@ trait DownloadManager[F[_]] {
     *
     * The unwrapped `F[Unit]` _inside_ the `F[F[Unit]]` can be used to
     * wait until the actual download finishes, or results in an error. */
-  def scheduleDownload(summary: BlockSummary, source: Node, relay: Boolean): F[F[Unit]]
+  def scheduleDownload(summary: BlockSummary, source: Node, relay: Boolean): F[WaitHandle[F]]
 }
 
 object DownloadManagerImpl {
   implicit val metricsSource: Metrics.Source =
     Metrics.Source(GossipingMetricsSource, "DownloadManager")
+
+  // to use .minimumOption on collections of (Node, Int)
+  implicit val sourcesAndCountersOrder: Order[(Node, Int)] = Order[Int].contramap[(Node, Int)](_._2)
 
   /** Export base 0 values so we have non-empty series for charts. */
   def establishMetrics[F[_]: Monad: Metrics] =
@@ -53,18 +59,24 @@ object DownloadManagerImpl {
       _ <- Metrics[F].incrementGauge("fetches_ongoing", 0)
     } yield ()
 
-  type Feedback[F[_]] = Deferred[F, Either[Throwable, Unit]]
-  sealed trait DownloadTag
-  sealed trait ScheduleTag
-  type DownloadFeedback[F[_]] = Feedback[F] @@ DownloadTag
-  type ScheduleFeedback[F[_]] = Feedback[F] @@ ScheduleTag
+  type Feedback[F[_], A] = Deferred[F, Either[Throwable, A]]
+  // Feedback about whether the download eventually succeeded.
+  type DownloadFeedback[F[_]] = Feedback[F, Unit]
+  // Feedback about whether the scheduling itself succeeded.
+  type ScheduleFeedback[F[_]] = Feedback[F, DownloadFeedback[F]]
 
-  /** Interface to the local backend dependencies. */
+  /** Interface to the storage and consensus dependencies and callbacks. */
   trait Backend[F[_]] {
     def hasBlock(blockHash: ByteString): F[Boolean]
     def validateBlock(block: Block): F[Unit]
     def storeBlock(block: Block): F[Unit]
     def storeBlockSummary(summary: BlockSummary): F[Unit]
+
+    /** Notify about new blocks we were told about but haven't acquired yet. */
+    def onScheduled(summary: BlockSummary): F[Unit]
+
+    /** Notify about a new block we downloaded, verified and stored. */
+    def onDownloaded(blockHash: ByteString): F[Unit]
   }
 
   /** Messages the Download Manager uses inside its scheduler "queue". */
@@ -74,10 +86,7 @@ object DownloadManagerImpl {
         summary: BlockSummary,
         source: Node,
         relay: Boolean,
-        // Feedback about whether the scheduling itself succeeded.
-        scheduleFeedback: ScheduleFeedback[F],
-        // Feedback about whether the download eventually succeeded.
-        downloadFeedback: DownloadFeedback[F]
+        scheduleFeedback: ScheduleFeedback[F]
     ) extends Signal[F]
     final case class DownloadSuccess[F[_]](blockHash: ByteString)                extends Signal[F]
     final case class DownloadFailure[F[_]](blockHash: ByteString, ex: Throwable) extends Signal[F]
@@ -94,7 +103,9 @@ object DownloadManagerImpl {
       dependencies: Set[ByteString],
       isDownloading: Boolean = false,
       isError: Boolean = false,
-      watchers: List[DownloadFeedback[F]]
+      // Keep returning the same Deferred until one attempt to download is finished.
+      // The next schedule will create a new Deferred that will be completed anew.
+      maybeWatcher: Option[DownloadFeedback[F]]
   ) {
     val canStart: Boolean = !isDownloading && dependencies.isEmpty
   }
@@ -134,7 +145,7 @@ object DownloadManagerImpl {
           relaying,
           retriesConf
         )
-        managerLoop <- Concurrent[F].start(manager.run)
+        managerLoop <- manager.run.start
       } yield (isShutdown, workersRef, managerLoop, manager)
     } {
       case (isShutdown, workersRef, managerLoop, _) =>
@@ -151,7 +162,7 @@ object DownloadManagerImpl {
 
   /** All dependencies that need to be downloaded before a block. */
   private def dependencies(summary: BlockSummary): Seq[ByteString] =
-    summary.getHeader.parentHashes ++ summary.getHeader.justifications.map(_.latestBlockHash)
+    summary.parentHashes ++ summary.justifications.map(_.latestBlockHash)
 }
 
 class DownloadManagerImpl[F[_]: Concurrent: Log: Timer: Metrics](
@@ -180,37 +191,52 @@ class DownloadManagerImpl[F[_]: Concurrent: Log: Timer: Metrics](
       Sync[F].unit
     )
 
-  override def scheduleDownload(summary: BlockSummary, source: Node, relay: Boolean): F[F[Unit]] =
+  private def makeDownloadFeedback =
+    Deferred[F, Either[Throwable, Unit]]
+
+  private def makeScheduleFeedback =
+    Deferred[F, Either[Throwable, Deferred[F, Either[Throwable, Unit]]]]
+
+  override def scheduleDownload(
+      summary: BlockSummary,
+      source: Node,
+      relay: Boolean
+  ): F[WaitHandle[F]] =
     for {
       // Fail rather than block forever.
       _ <- ensureNotShutdown
       // Feedback about whether we successfully scheduled the item.
-      sr <- Deferred[F, Either[Throwable, Unit]].map(tag[ScheduleTag][Feedback[F]](_))
-      dr <- Deferred[F, Either[Throwable, Unit]].map(tag[DownloadTag][Feedback[F]](_))
-      _  <- signal.put(Signal.Download(summary, source, relay, sr, dr))
-      _  <- Sync[F].rethrow(sr.get)
-    } yield Sync[F].rethrow(dr.get)
+      sf <- makeScheduleFeedback
+      _  <- signal.put(Signal.Download(summary, source, relay, sf))
+      df <- Sync[F].rethrow(sf.get)
+    } yield Sync[F].rethrow(df.get)
 
   /** Run the manager loop which listens to signals and starts workers when it can. */
   def run: F[Unit] =
     signal.take.flatMap {
-      case Signal.Download(summary, source, relay, scheduleFeedback, downloadFeedback) =>
+      case Signal.Download(summary, source, relay, scheduleFeedback) =>
         // At this point we should have already synced and only scheduled things to which we know how to get.
         val start =
           isDownloaded(summary.blockHash).ifM(
-            downloadFeedback.complete(Right(())),
-            ensureNoMissingDependencies(summary) *> {
-              for {
-                items <- itemsRef.get
-                item  <- mergeItem(items, summary, source, relay, downloadFeedback)
-                _     <- itemsRef.update(_ + (summary.blockHash -> item))
-                _     <- if (item.canStart) startWorker(item) else Sync[F].unit
-                _     <- setScheduledGauge
-              } yield ()
-            }
+            for {
+              downloadFeedback <- makeDownloadFeedback
+              _                <- downloadFeedback.complete(Right(()))
+            } yield downloadFeedback,
+            for {
+              _                        <- ensureNoMissingDependencies(summary)
+              items                    <- itemsRef.get
+              itemAndFeedback          <- mergeItem(items, summary, source, relay)
+              (item, downloadFeedback) = itemAndFeedback
+              _                        <- backend.onScheduled(summary).start.whenA(!items.contains(summary.blockHash))
+              _                        <- itemsRef.update(_ + (summary.blockHash -> item))
+              _                        <- if (item.canStart) startWorker(item) else Sync[F].unit
+              _                        <- setScheduledGauge
+            } yield downloadFeedback
           )
         // Report any startup errors so the caller knows something's fatally wrong, then carry on.
-        start.attempt.flatMap(scheduleFeedback.complete) *> run
+        start
+          .attemptAndLog("An error occurred when handling Download signal.")
+          .flatMap(scheduleFeedback.complete) >> run
 
       case Signal.DownloadSuccess(blockHash) =>
         val finish = for {
@@ -225,15 +251,16 @@ class DownloadManagerImpl[F[_]: Concurrent: Log: Timer: Metrics](
                    val startables = dependants.collect {
                      case (_, dep) if dep.canStart => dep
                    }
-                   (items ++ dependants - blockHash, item.watchers -> startables.toList)
+                   (items ++ dependants - blockHash, item.maybeWatcher.toList -> startables.toList)
                  }
           (watchers, startables) = next
           _                      <- watchers.traverse(_.complete(Right(())).attempt.void)
+          _                      <- backend.onDownloaded(blockHash).start
           _                      <- startables.traverse(startWorker)
           _                      <- setScheduledGauge
         } yield ()
 
-        finish.attempt *> run
+        finish.attemptAndLog("An error occurred when handling DownloadSuccess signal.") >> run
 
       case Signal.DownloadFailure(blockHash, ex) =>
         val finish = for {
@@ -244,15 +271,15 @@ class DownloadManagerImpl[F[_]: Concurrent: Log: Timer: Metrics](
           watchers <- itemsRef.modify { items =>
                        val item = items(blockHash)
                        val tombstone: Item[F] =
-                         item.copy(isDownloading = false, isError = true, watchers = Nil)
-                       (items + (blockHash -> tombstone), item.watchers)
+                         item.copy(isDownloading = false, isError = true, maybeWatcher = None)
+                       (items + (blockHash -> tombstone), item.maybeWatcher.toList)
                      }
           // Tell whoever scheduled it before that it's over.
           _ <- watchers.traverse(_.complete(Left(ex)).attempt.void)
           _ <- setScheduledGauge
         } yield ()
 
-        finish.attempt *> run
+        finish.attemptAndLog("An error occurred when handling DownloadFailure signal.") >> run
     }
 
   // Indicate how many items we have in the queue.
@@ -262,36 +289,41 @@ class DownloadManagerImpl[F[_]: Concurrent: Log: Timer: Metrics](
       _     <- Metrics[F].setGauge("downloads_scheduled", items.size.toLong)
     } yield ()
 
-  /** Either create a new item or add the source to an existing one. */
+  /** Either create a new item or add the source to an existing one.
+    * Return the deferred that will eventually signal the completion of the task.
+    */
   private def mergeItem(
       items: Map[ByteString, Item[F]],
       summary: BlockSummary,
       source: Node,
-      relay: Boolean,
-      downloadFeedback: DownloadFeedback[F]
-  ): F[Item[F]] =
-    items.get(summary.blockHash) map { existing =>
-      Sync[F].pure {
-        existing.copy(
-          sources = existing.sources + source,
-          relay = existing.relay || relay,
-          watchers = downloadFeedback :: existing.watchers
-        )
-      }
-    } getOrElse {
-      // Collect which dependencies have already been downloaded.
-      dependencies(summary).toList.traverse { hash =>
-        if (items.contains(hash)) Sync[F].pure(hash -> false)
-        else isDownloaded(hash).map(hash            -> _)
-      } map { deps =>
-        val pending = deps.filterNot(_._2).map(_._1).toSet
-        Item(
-          summary,
-          Set(source),
-          relay,
-          dependencies = pending,
-          watchers = List(downloadFeedback)
-        )
+      relay: Boolean
+  ): F[(Item[F], DownloadFeedback[F])] =
+    makeDownloadFeedback flatMap { freshDownloadFeedback =>
+      items.get(summary.blockHash) map { existing =>
+        Sync[F].pure {
+          // If it was already scheduled we keep the existing Deferred.
+          val downloadFeedback = existing.maybeWatcher getOrElse freshDownloadFeedback
+          existing.copy(
+            sources = existing.sources + source,
+            relay = existing.relay || relay,
+            maybeWatcher = Some(downloadFeedback)
+          ) -> downloadFeedback
+        }
+      } getOrElse {
+        // Collect which dependencies have already been downloaded.
+        dependencies(summary).toList.traverse { hash =>
+          if (items.contains(hash)) Sync[F].pure(hash -> false)
+          else isDownloaded(hash).map(hash            -> _)
+        } map { deps =>
+          val pending = deps.filterNot(_._2).map(_._1).toSet
+          Item(
+            summary,
+            Set(source),
+            relay,
+            dependencies = pending,
+            maybeWatcher = Some(freshDownloadFeedback)
+          ) -> freshDownloadFeedback
+        }
       }
     }
 
@@ -346,67 +378,68 @@ class DownloadManagerImpl[F[_]: Concurrent: Log: Timer: Metrics](
         _ <- Metrics[F].incrementCounter("downloads_succeeded")
       } yield ()
 
-    def downloadWithRetries(summary: BlockSummary, source: Node, relay: Boolean): F[Unit] = {
-      val downloadEffect = tryDownload(summary, source, relay)
-
-      def loop(counter: Int): F[Unit] =
-        downloadEffect.handleErrorWith {
-          case NonFatal(ex) if counter > retriesConf.maxRetries.toInt =>
-            // Let's just return the last error, unwrapped, so callers don't have to anticipate
-            // whether this component is going to do retries or not.
-            // Alternatively we could use `Throwable.addSupressed` to collect all of them.
-            Sync[F].raiseError[Unit](ex)
-
-          case NonFatal(ex) =>
-            val duration = retriesConf.initialBackoffPeriod *
-              math.pow(retriesConf.backoffFactor, counter.toDouble)
-
-            val nextCounter = counter + 1
-
-            duration match {
-              case delay: FiniteDuration =>
-                // Downloads never fail forever, even if the signal is raised, a new schedule can restart it,
-                // maybe from a different source, so let's count every time it doesn't succeed.
-                Metrics[F].incrementCounter("downloads_failed") *>
-                  Log[F].warn(
-                    s"Retrying downloading of block $id, source: ${source.show}, attempt: $nextCounter, delay: $delay, error: $ex"
-                  ) >>
-                  Timer[F].sleep(delay) >>
-                  loop(nextCounter)
-
-              case _: Duration.Infinite =>
-                Sync[F].raiseError[Unit](
-                  new RuntimeException(
-                    s"Failed to retry downloading block $id, source: ${source.show}, got Infinite backoff delay"
-                  )
-                )
-            }
-        }
-
-      if (retriesConf.maxRetries.toInt == 0) downloadEffect else loop(0)
-    }
-
     // Try to download until we succeed or give up.
-    def loop(tried: Set[Node], errors: List[Throwable]): F[Unit] =
-      // Get the latest sources.
+    def loop(counterPerSource: Map[Node, Int], lastError: Option[Throwable]): F[Unit] =
       itemsRef.get.map(_(blockHash)).flatMap { item =>
-        (item.sources -- tried).headOption match {
-          case Some(source) =>
-            downloadWithRetries(item.summary, source, item.relay).recoverWith {
-              case NonFatal(ex) =>
-                Log[F].error(s"Failed to download block $id from ${source.host}", ex) *>
-                  loop(tried + source, ex :: errors)
-            }
-          case None =>
-            Log[F].error(
-              s"Could not download block $id from any of the sources; tried ${tried.size}."
-            ) *> failure(errors.head)
+        val prevSources           = counterPerSource.keySet
+        val potentiallyNewSources = item.sources
+        if (potentiallyNewSources.size > prevSources.size) {
+          val newSources = potentiallyNewSources.map((_, 0)).toMap |+| counterPerSource
+          // We've got new sources during download, so need to recheck the least tried source
+          loop(newSources, lastError)
+        } else {
+          // No sources changes, can continue.
+          // Finding least tried source.
+          counterPerSource.toList.minimumOption match {
+            case None =>
+              failure(new IllegalStateException("No source to download from."))
+
+            case Some((_, attempt)) if attempt > retriesConf.maxRetries.toInt =>
+              // Least tried source is tried more than allowed => don't have sources to try anymore.
+              // Let's just return the last error, unwrapped, so callers don't have to anticipate
+              // whether this component is going to do retries or not.
+              // Alternatively we could use `Throwable.addSupressed` to collect all of them.
+              val countersSum = counterPerSource.values.sum
+              val sourcesNum  = counterPerSource.size
+              val ex          = lastError.getOrElse(new IllegalStateException("No errors captured."))
+              Log[F]
+                .error(
+                  s"Could not download block $id from any of the sources; tried $countersSum requests for $sourcesNum sources: $ex"
+                ) *> failure(ex)
+
+            case Some((source, attempt)) =>
+              val duration = if (attempt > 0) {
+                retriesConf.initialBackoffPeriod *
+                  math.pow(retriesConf.backoffFactor, (attempt - 1).toDouble)
+              } else {
+                Duration.Zero
+              }
+              duration match {
+                case delay: FiniteDuration =>
+                  Log[F].debug(
+                    s"Scheduling download of block $id from ${source.show -> "peer"} later, $attempt, $delay"
+                  ) *>
+                    Timer[F].sleep(delay) *>
+                    tryDownload(item.summary, source, item.relay).handleErrorWith {
+                      case NonFatal(ex) =>
+                        val nextAttempt = attempt + 1
+                        Metrics[F].incrementCounter("downloads_failed") *>
+                          Log[F].warn(
+                            s"Retrying download of block $id from other sources, failed source: ${source.show -> "peer"}, prev $attempt: $ex"
+                          ) *>
+                          loop(counterPerSource.updated(source, nextAttempt), ex.some)
+                    }
+                case _: Duration.Infinite => sys.error("Unreachable")
+              }
+          }
         }
       }
 
-    // Make sure the manager knows we're done, even if we fail unexpectedly.
-    loop(Set.empty, List(new IllegalStateException("No source to download from."))) recoverWith {
-      case NonFatal(ex) => failure(ex)
+    itemsRef.get.map(_(blockHash)).flatMap { item =>
+      // Make sure the manager knows we're done, even if we fail unexpectedly.
+      loop(item.sources.map((_, 0)).toMap, lastError = none[Throwable]) recoverWith {
+        case NonFatal(ex) => failure(ex)
+      }
     }
   }
 
@@ -485,6 +518,9 @@ class DownloadManagerImpl[F[_]: Concurrent: Log: Timer: Metrics](
                   }
 
         block <- Sync[F].delay(Block.parseFrom(content))
+        _ <- Sync[F]
+              .raiseError(invalid("Retrieved block has unexpected block hash."))
+              .whenA(block.blockHash != blockHash)
       } yield block
 
     // Indicate how many fetches we are trying to do at a time. If it's larger then the semaphore

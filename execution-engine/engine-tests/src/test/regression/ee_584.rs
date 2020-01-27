@@ -1,37 +1,22 @@
-use std::collections::HashMap;
+use engine_shared::{stored_value::StoredValue, transform::Transform};
+use engine_test_support::low_level::{
+    ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG,
+};
 
-use crate::support::test_support::{DeployBuilder, ExecRequestBuilder, WasmTestBuilder};
-use contract_ffi::value::account::PublicKey;
-use contract_ffi::value::{Value, U512};
-use engine_core::engine_state::{EngineConfig, MAX_PAYMENT};
-use engine_shared::transform::Transform;
-
-const GENESIS_ADDR: [u8; 32] = [6u8; 32];
+const CONTRACT_EE_584_REGRESSION: &str = "ee_584_regression.wasm";
 
 #[ignore]
 #[test]
 fn should_run_ee_584_no_errored_session_transforms() {
-    let genesis_public_key = PublicKey::new(GENESIS_ADDR);
-
-    let engine_config = EngineConfig::new().set_use_payment_code(true);
-
-    let exec_request = {
-        let deploy = DeployBuilder::new()
-            .with_address(GENESIS_ADDR)
-            .with_session_code("ee_584_regression.wasm", ())
-            .with_payment_code("standard_payment.wasm", (U512::from(MAX_PAYMENT),))
-            .with_authorization_keys(&[genesis_public_key])
-            .with_nonce(1)
+    let exec_request =
+        ExecuteRequestBuilder::standard(DEFAULT_ACCOUNT_ADDR, CONTRACT_EE_584_REGRESSION, ())
             .build();
 
-        ExecRequestBuilder::new().push_deploy(deploy).build()
-    };
-
-    let mut builder = WasmTestBuilder::new(engine_config);
+    let mut builder = InMemoryWasmTestBuilder::default();
 
     builder
-        .run_genesis(GENESIS_ADDR, HashMap::default())
-        .exec_with_exec_request(exec_request);
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request);
 
     assert!(builder.is_error());
 
@@ -39,10 +24,12 @@ fn should_run_ee_584_no_errored_session_transforms() {
 
     assert!(transforms[0]
         .iter()
-        .find(|(_, t)| if let Transform::Write(Value::String(s)) = t {
-            s == "Hello, World!"
-        } else {
-            false
-        })
+        .find(
+            |(_, t)| if let Transform::Write(StoredValue::CLValue(cl_value)) = t {
+                cl_value.to_owned().into_t::<String>().unwrap_or_default() == "Hello, World!"
+            } else {
+                false
+            }
+        )
         .is_none());
 }

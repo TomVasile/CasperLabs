@@ -1,16 +1,17 @@
 #![no_std]
-#![feature(cell_update)]
 
-extern crate alloc;
-extern crate contract_ffi;
-
-use contract_ffi::contract_api;
-use contract_ffi::value::account::PurseId;
+use contract::{
+    contract_api::{account, runtime},
+    unwrap_or_revert::UnwrapOrRevert,
+};
+use types::{account::PurseId, ApiError};
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let known_main_purse: PurseId = contract_api::get_arg(0);
-    let main_purse: PurseId = contract_api::main_purse();
+    let known_main_purse: PurseId = runtime::get_arg(0)
+        .unwrap_or_revert_with(ApiError::MissingArgument)
+        .unwrap_or_revert_with(ApiError::InvalidArgument);
+    let main_purse: PurseId = account::get_main_purse();
     assert_eq!(
         main_purse, known_main_purse,
         "main purse was not known purse"

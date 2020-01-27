@@ -24,7 +24,26 @@ The recommended method for generating keys is to use the [Docker image](/hack/ke
 
 More advanced users may prefer to generate keys directly on their host OS.
 
-### Using Docker (recommended)
+### Using casperlabs-client (recommended)
+
+#### Prerequisites
+* [casperlabs-client](https://github.com/CasperLabs/CasperLabs/blob/dev/docs/INSTALL.md)
+
+#### Instructions
+
+```
+mkdir /tmp/keys
+casperlabs-client keygen /tmp/keys
+```
+
+You should see the following output:
+
+```
+Keys successfully created in directory: /tmp/keys
+```
+
+
+### Using Docker
 
 #### Prerequisites
 * [Docker](https://docs.docker.com/install/)
@@ -74,7 +93,7 @@ Generate keys: Success
 
 (for DApp Developers)
 
-Currently, the recommended method for generating account keys is to use the [CasperLabs Explorer](https://explorer.casperlabs.io).
+Currently, the recommended method for generating account keys is to use the [CasperLabs Explorer](https://clarity.casperlabs.io).
 
 These instructions are provided for reference and advanced use-cases.
 

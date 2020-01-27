@@ -1,45 +1,100 @@
-use std::collections::HashMap;
+use engine_shared::{stored_value::StoredValue, transform::Transform};
+use engine_test_support::low_level::{
+    ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG,
+};
+use types::{bytesrepr::ToBytes, CLValue, Key};
 
-use contract_ffi::bytesrepr::ToBytes;
-use contract_ffi::key::Key;
-use contract_ffi::value::Value;
-use engine_shared::transform::Transform;
+const CONTRACT_LOCAL_STATE: &str = "local_state.wasm";
 
-use crate::support::test_support::{WasmTestBuilder, DEFAULT_BLOCK_TIME};
-
-const GENESIS_ADDR: [u8; 32] = [6u8; 32];
+const CONTRACT_LOCAL_STATE_ADD: &str = "local_state_add.wasm";
+const CMD_WRITE: &str = "write";
+const CMD_ADD: &str = "add";
 
 #[ignore]
 #[test]
 fn should_run_local_state_contract() {
+    let exec_request_1 =
+        ExecuteRequestBuilder::standard(DEFAULT_ACCOUNT_ADDR, CONTRACT_LOCAL_STATE, ()).build();
+
+    let exec_request_2 =
+        ExecuteRequestBuilder::standard(DEFAULT_ACCOUNT_ADDR, CONTRACT_LOCAL_STATE, ()).build();
+
     // This test runs a contract that's after every call extends the same key with
     // more data
-    let result = WasmTestBuilder::default()
-        .run_genesis(GENESIS_ADDR, HashMap::new())
-        .exec(GENESIS_ADDR, "local_state.wasm", DEFAULT_BLOCK_TIME, 1)
+    let result = InMemoryWasmTestBuilder::default()
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request_1)
         .expect_success()
         .commit()
-        .exec(GENESIS_ADDR, "local_state.wasm", DEFAULT_BLOCK_TIME, 2)
+        .exec(exec_request_2)
         .expect_success()
         .commit()
         .finish();
 
     let transforms = result.builder().get_transforms();
 
-    let expected_local_key = Key::local(GENESIS_ADDR, &[66u8; 32].to_bytes().unwrap());
+    let expected_local_key = Key::local(DEFAULT_ACCOUNT_ADDR, &[66u8; 32].to_bytes().unwrap());
 
     assert_eq!(transforms.len(), 2);
     assert_eq!(
         transforms[0]
             .get(&expected_local_key)
             .expect("Should have expected local key"),
-        &Transform::Write(Value::String(String::from("Hello, world!")))
+        &Transform::Write(StoredValue::CLValue(
+            CLValue::from_t(String::from("Hello, world!")).unwrap()
+        ))
     );
 
     assert_eq!(
         transforms[1]
             .get(&expected_local_key)
             .expect("Should have expected local key"),
-        &Transform::Write(Value::String(String::from("Hello, world! Hello, world!")))
+        &Transform::Write(StoredValue::CLValue(
+            CLValue::from_t(String::from("Hello, world! Hello, world!")).unwrap()
+        ))
+    );
+}
+
+#[ignore]
+#[test]
+fn should_add_to_local_state() {
+    let exec_request_1 = ExecuteRequestBuilder::standard(
+        DEFAULT_ACCOUNT_ADDR,
+        CONTRACT_LOCAL_STATE_ADD,
+        (CMD_WRITE,),
+    )
+    .build();
+
+    let exec_request_2 =
+        ExecuteRequestBuilder::standard(DEFAULT_ACCOUNT_ADDR, CONTRACT_LOCAL_STATE_ADD, (CMD_ADD,))
+            .build();
+
+    let result = InMemoryWasmTestBuilder::default()
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request_1)
+        .expect_success()
+        .commit()
+        .exec(exec_request_2)
+        .expect_success()
+        .commit()
+        .finish();
+
+    let transforms = result.builder().get_transforms();
+
+    let expected_local_key = Key::local(DEFAULT_ACCOUNT_ADDR, &[66u8; 32].to_bytes().unwrap());
+
+    assert_eq!(transforms.len(), 2);
+    assert_eq!(
+        transforms[0]
+            .get(&expected_local_key)
+            .expect("Should have expected local key"),
+        &Transform::Write(StoredValue::CLValue(CLValue::from_t(10u64).unwrap()))
+    );
+
+    assert_eq!(
+        transforms[1]
+            .get(&expected_local_key)
+            .expect("Should have expected local key"),
+        &Transform::AddUInt64(5)
     );
 }

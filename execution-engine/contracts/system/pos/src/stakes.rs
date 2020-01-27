@@ -1,12 +1,17 @@
-use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::string::String;
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::String,
+};
 use core::fmt::Write;
 
-use contract_ffi::contract_api;
-use contract_ffi::key::Key;
-use contract_ffi::value::{account::PublicKey, U512};
+use base16;
 
-use crate::error::{Error, Result};
+use contract::contract_api::runtime;
+use types::{
+    account::PublicKey,
+    system_contract_errors::pos::{Error, Result},
+    Key, U512,
+};
 
 use super::{MAX_DECREASE, MAX_INCREASE, MAX_REL_DECREASE, MAX_REL_INCREASE, MAX_SPREAD};
 
@@ -23,7 +28,7 @@ impl StakesProvider for ContractStakes {
     /// Reads the current stakes from the contract's known urefs.
     fn read() -> Result<Stakes> {
         let mut stakes = BTreeMap::new();
-        for (name, _) in contract_api::list_known_urefs() {
+        for (name, _) in runtime::list_named_keys() {
             let mut split_name = name.split('_');
             if Some("v") != split_name.next() {
                 continue;
@@ -31,11 +36,13 @@ impl StakesProvider for ContractStakes {
             let hex_key = split_name
                 .next()
                 .ok_or(Error::StakesKeyDeserializationFailed)?;
-            let mut key_bytes = [0u8; 32];
-            for i in 0..32 {
-                key_bytes[i] = u8::from_str_radix(&hex_key[2 * i..2 * (i + 1)], 16)
-                    .map_err(|_| Error::StakesKeyDeserializationFailed)?;
+            if hex_key.len() != 64 {
+                return Err(Error::StakesKeyDeserializationFailed);
             }
+            let mut key_bytes = [0u8; 32];
+            let _bytes_written = base16::decode_slice(hex_key, &mut key_bytes)
+                .map_err(|_| Error::StakesKeyDeserializationFailed)?;
+            debug_assert!(_bytes_written == key_bytes.len());
             let pub_key = PublicKey::new(key_bytes);
             let balance = split_name
                 .next()
@@ -68,13 +75,13 @@ impl StakesProvider for ContractStakes {
             })
             .collect();
         // Remove and add urefs to update the contract's known urefs accordingly.
-        for (name, _) in contract_api::list_known_urefs() {
+        for (name, _) in runtime::list_named_keys() {
             if name.starts_with("v_") && !new_urefs.remove(&name) {
-                contract_api::remove_uref(&name);
+                runtime::remove_key(&name);
             }
         }
         for name in new_urefs {
-            contract_api::add_uref(&name, &Key::Hash([0; 32]));
+            runtime::put_key(&name, Key::Hash([0; 32]));
         }
     }
 }
@@ -195,9 +202,8 @@ impl Stakes {
 
 #[cfg(test)]
 mod tests {
-    use contract_ffi::value::{account::PublicKey, U512};
+    use types::{account::PublicKey, system_contract_errors::pos::Error, U512};
 
-    use crate::error::Error;
     use crate::stakes::Stakes;
 
     const KEY1: [u8; 32] = [1; 32];

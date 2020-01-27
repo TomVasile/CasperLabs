@@ -2,7 +2,6 @@ package io.casperlabs.casper
 
 import com.google.protobuf.ByteString
 import io.casperlabs.casper.consensus.state.Key.URef.AccessRights
-import io.casperlabs.casper.protocol._
 import io.casperlabs.crypto.codec._
 import io.casperlabs.ipc._
 import io.casperlabs.casper.consensus.state._
@@ -48,23 +47,41 @@ object PrettyPrinter {
     case NamedKey(name, Some(key)) => s"NamedKey($name, ${buildString(key)})"
   }
 
+  def buildString(v: StoredValue): String = v.variants match {
+    case StoredValue.Variants.Account(
+        Account(
+          pk,
+          urefs,
+          purseId,
+          associatedKeys,
+          actionThresholds
+        )
+        ) =>
+      s"Account(${buildString(pk)}, {${urefs.map(buildString).mkString(",")}}, ${purseId
+        .map(buildString)}, {${associatedKeys
+        .map(buildString)
+        .mkString(",")}, {${actionThresholds.map(buildString)}})"
+    case StoredValue.Variants.Contract(Contract(body, urefs, protocolVersion)) =>
+      s"Contract(${buildString(body)}, {${urefs.map(buildString).mkString(",")}}, ${buildString(protocolVersion)})"
+    case StoredValue.Variants.ClValue(_) => "ClValue"
+    case StoredValue.Variants.Empty      => "Empty"
+  }
+
   def buildString(v: Value): String = v.value match {
     case Value.Value.Empty => "ValueEmpty"
     case Value.Value.Account(
         Account(
           pk,
-          nonce,
           urefs,
           purseId,
           associatedKeys,
-          actionThresholds,
-          accountActivity
+          actionThresholds
         )
         ) =>
-      s"Account(${buildString(pk)}, $nonce, {${urefs.map(buildString).mkString(",")}}, ${purseId
+      s"Account(${buildString(pk)}, {${urefs.map(buildString).mkString(",")}}, ${purseId
         .map(buildString)}, {${associatedKeys
         .map(buildString)
-        .mkString(",")}, {${actionThresholds.map(buildString)}}, {${accountActivity.map(buildString)})"
+        .mkString(",")}, {${actionThresholds.map(buildString)}})"
     case Value.Value.BytesValue(bytes) => s"ByteArray(${buildString(bytes)})"
     case Value.Value.Contract(Contract(body, urefs, protocolVersion)) =>
       s"Contract(${buildString(body)}, {${urefs.map(buildString).mkString(",")}}, ${buildString(protocolVersion)})"
@@ -79,9 +96,6 @@ object PrettyPrinter {
     case Value.Value.Unit(_)                      => "Unit"
   }
 
-  def buildString(b: BlockMessage): String =
-    buildString(LegacyConversions.toBlock(b))
-
   def buildString(b: consensus.Block): String = {
     val blockString = for {
       header     <- b.header
@@ -91,7 +105,7 @@ object PrettyPrinter {
       s"-- Sender ID ${buildString(header.validatorPublicKey)} " +
       s"-- M Parent Hash ${buildString(mainParent)} " +
       s"-- Contents ${buildString(postState.postStateHash)}" +
-      s"-- Chain ID ${limit(header.chainId, 10)}"
+      s"-- Chain Name ${limit(header.chainName, 10)}"
     blockString match {
       case Some(str) => str
       case None      => s"Block with missing elements (${buildString(b.blockHash)})"
@@ -134,12 +148,6 @@ object PrettyPrinter {
   private def buildString(at: Account.ActionThresholds): String =
     s"Deployment threshold ${at.deploymentThreshold}, Key management threshold: ${at.keyManagementThreshold}"
 
-  private def buildString(ac: Account.AccountActivity): String =
-    s"Last deploy: ${ac.deploymentLastUsed}, last key management change: ${ac.keyManagementLastUsed}, inactivity period limit: ${ac.inactivityPeriodLimit}"
-
   def buildString(d: consensus.Deploy): String =
-    s"Deploy ${buildStringNoLimit(d.deployHash)} (${buildStringNoLimit(d.getHeader.accountPublicKey)} / ${d.getHeader.nonce})"
-
-  def buildString(d: DeployData): String =
-    s"Deploy #${d.timestamp}"
+    s"Deploy ${buildStringNoLimit(d.deployHash)} (${buildStringNoLimit(d.getHeader.accountPublicKey)})"
 }

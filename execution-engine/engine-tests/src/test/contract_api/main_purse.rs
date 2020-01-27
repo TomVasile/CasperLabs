@@ -1,70 +1,67 @@
-use std::collections::HashMap;
+use engine_shared::stored_value::StoredValue;
+use engine_test_support::low_level::{
+    ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG,
+    DEFAULT_PAYMENT,
+};
+use types::Key;
 
-use crate::support::test_support::{WasmTestBuilder, DEFAULT_BLOCK_TIME};
-use contract_ffi::key::Key;
-use contract_ffi::value::Account;
-
-const GENESIS_ADDR: [u8; 32] = [6u8; 32];
+const CONTRACT_MAIN_PURSE: &str = "main_purse.wasm";
+const CONTRACT_TRANSFER_PURSE_TO_ACCOUNT: &str = "transfer_purse_to_account.wasm";
 const ACCOUNT_1_ADDR: [u8; 32] = [1u8; 32];
 
 #[ignore]
 #[test]
-fn should_run_main_purse_contract_genesis_account() {
-    let mut builder = WasmTestBuilder::default();
+fn should_run_main_purse_contract_default_account() {
+    let mut builder = InMemoryWasmTestBuilder::default();
 
-    let builder = builder.run_genesis(GENESIS_ADDR, HashMap::new());
+    let builder = builder.run_genesis(&DEFAULT_GENESIS_CONFIG);
 
-    let genesis_account: Account = {
-        let tmp = builder.clone();
-        tmp.get_genesis_account().to_owned()
+    let default_account = if let Some(StoredValue::Account(account)) =
+        builder.query(None, Key::Account(DEFAULT_ACCOUNT_ADDR), &[])
+    {
+        account
+    } else {
+        panic!("could not get account")
     };
 
-    builder
-        .exec_with_args(
-            GENESIS_ADDR,
-            "main_purse.wasm",
-            DEFAULT_BLOCK_TIME,
-            1,
-            (genesis_account.purse_id(),),
-        )
-        .expect_success()
-        .commit();
+    let exec_request = ExecuteRequestBuilder::standard(
+        DEFAULT_ACCOUNT_ADDR,
+        CONTRACT_MAIN_PURSE,
+        (default_account.purse_id(),),
+    )
+    .build();
+
+    builder.exec(exec_request).expect_success().commit();
 }
 
 #[ignore]
 #[test]
 fn should_run_main_purse_contract_account_1() {
-    let account_key = Key::Account(ACCOUNT_1_ADDR);
+    let mut builder = InMemoryWasmTestBuilder::default();
 
-    let mut builder = WasmTestBuilder::default();
+    let exec_request_1 = ExecuteRequestBuilder::standard(
+        DEFAULT_ACCOUNT_ADDR,
+        CONTRACT_TRANSFER_PURSE_TO_ACCOUNT,
+        (ACCOUNT_1_ADDR, *DEFAULT_PAYMENT),
+    )
+    .build();
 
     let builder = builder
-        .run_genesis(GENESIS_ADDR, HashMap::new())
-        .exec_with_args(
-            GENESIS_ADDR,
-            "transfer_to_account_01.wasm",
-            DEFAULT_BLOCK_TIME,
-            1,
-            (ACCOUNT_1_ADDR,),
-        )
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request_1)
         .expect_success()
         .commit();
 
-    let account_1: Account = {
-        let tmp = builder.clone();
-        let transforms = tmp.get_transforms();
-        crate::support::test_support::get_account(&transforms[0], &account_key)
-            .expect("should get account")
-    };
+    let account_1 = builder
+        .get_account(ACCOUNT_1_ADDR)
+        .expect("should get account");
 
-    builder
-        .exec_with_args(
-            ACCOUNT_1_ADDR,
-            "main_purse.wasm",
-            DEFAULT_BLOCK_TIME,
-            1,
-            (account_1.purse_id(),),
-        )
-        .expect_success()
-        .commit();
+    let exec_request_2 = ExecuteRequestBuilder::standard(
+        ACCOUNT_1_ADDR,
+        CONTRACT_MAIN_PURSE,
+        (account_1.purse_id(),),
+    )
+    .build();
+
+    builder.exec(exec_request_2).expect_success().commit();
 }

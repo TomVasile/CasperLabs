@@ -17,6 +17,10 @@ from setuptools.command.install import install as InstallCommand
 from distutils.spawn import find_executable
 
 THIS_DIRECTORY = os.path.dirname(os.path.realpath(__file__))
+
+# Directory with Scala client's bundled contracts
+
+CONTRACTS_DIR = f"{THIS_DIRECTORY}/../../../client/src/main/resources"
 PROTOBUF_DIR = f"{THIS_DIRECTORY}/../../../protobuf"
 PROTO_DIR = f"{THIS_DIRECTORY}/casperlabs_client/proto"
 PACKAGE_DIR = f"{THIS_DIRECTORY}/casperlabs_client"
@@ -81,6 +85,7 @@ def run_protoc(file_names, PROTO_DIR=PROTO_DIR):
                 f"-I{PROTO_DIR}",
                 "-I" + google_proto,
                 f"--python_out={PACKAGE_DIR}",
+                f"--python_grpc_out={PACKAGE_DIR}",
                 f"--grpc_python_out={PACKAGE_DIR}",
                 file_name,
             )
@@ -148,6 +153,49 @@ def run_codegen():
         [(r"(import .*_pb2)", r"from . \1")],
         glob(f"{PACKAGE_DIR}/*pb2*py"),
     )
+    modify_files(
+        "Patch generated Python gRPC modules (for asyncio)",
+        [(r"(import .*_pb2)", r"from . \1")],
+        [fn for fn in glob(f"{PACKAGE_DIR}/*_grpc[.]py") if "_pb2_" not in fn],
+    )
+    pattern = (
+        os.environ.get("TAG_NAME")
+        and "/root/bundled_contracts/*.wasm"
+        or os.path.join(CONTRACTS_DIR, "*.wasm")
+    )
+    bundled_contracts = list(glob(pattern))
+    if len(bundled_contracts) == 0:
+        raise Exception(
+            f"Could not find wasm files that should be bundled with the client. {pattern}"
+        )
+    for filename in bundled_contracts:
+        shutil.copy(filename, PACKAGE_DIR)
+
+
+def prepare_sdist():
+    contracts_dir = (
+        os.environ.get("TAG_NAME") and "/root/bundled_contracts" or CONTRACTS_DIR
+    )
+    bundled_contracts = [
+        f"{contracts_dir}/{f}"
+        for f in [
+            "bonding.wasm",
+            "standard_payment.wasm",
+            "transfer_to_account.wasm",
+            "unbonding.wasm",
+        ]
+    ]
+    for file_name in bundled_contracts:
+        if not os.path.exists(file_name):
+            raise Exception(f"Contract file {file_name} does not exit")
+        base_name = os.path.basename(file_name)
+        copyfile(file_name, os.path.join(PACKAGE_DIR, base_name))
+        print(f"Copied contract {base_name}")
+    run_codegen()
+
+
+if len(sys.argv) > 1 and sys.argv[1] == "sdist":
+    prepare_sdist()
 
 
 with open(path.join(THIS_DIRECTORY, "README.md"), encoding="utf-8") as fh:
@@ -156,7 +204,6 @@ with open(path.join(THIS_DIRECTORY, "README.md"), encoding="utf-8") as fh:
 
 class CInstall(InstallCommand):
     def run(self):
-        run_codegen()
         super().run()
 
 
@@ -168,7 +215,7 @@ class CDevelop(DevelopCommand):
 
 setup(
     name=NAME,
-    version="0.4.1",
+    version="0.8.0",
     packages=find_packages(exclude=["tests"]),
     setup_requires=[
         "protobuf==3.9.1",
@@ -181,12 +228,15 @@ setup(
         "grpcio>=1.20",
         "pyblake2==1.1.2",
         "ed25519==1.4",
+        "cryptography==2.8",
+        "pycryptodome==3.9.4",
     ],
     cmdclass={"install": CInstall, "develop": CDevelop},
     description="Python Client for interacting with a CasperLabs Node",
     long_description=long_description,
     long_description_content_type="text/markdown",
     include_package_data=True,
+    package_data={NAME: [f"{THIS_DIRECTORY}/casperlabs_client/*.wasm"]},
     keywords="casperlabs blockchain ethereum smart-contracts",
     author="CasperLabs LLC",
     author_email="testing@casperlabs.io",
@@ -201,13 +251,12 @@ setup(
         "Intended Audience :: Developers",
     ],
     python_requires=">=3.6.0",
+    url="https://casperlabs.io/",
     project_urls={
         "Source": "https://github.com/CasperLabs/CasperLabs/tree/dev/integration-testing/client/CasperLabsClient",
         "Readme": "https://github.com/CasperLabs/CasperLabs/blob/dev/integration-testing/client/CasperLabsClient/README.md",
     },
     entry_points={
-        "console_scripts": [
-            "casperlabs_client = casperlabs_client.casperlabs_client:main"
-        ]
+        "console_scripts": ["casperlabs_client = casperlabs_client.cli:main"]
     },
 )

@@ -1,63 +1,64 @@
 #![no_std]
 
-#[macro_use]
 extern crate alloc;
-extern crate contract_ffi;
 
-use alloc::collections::BTreeMap;
-use alloc::string::String;
+use alloc::{collections::BTreeMap, string::String};
 
-use contract_ffi::contract_api::pointers::{ContractPointer, UPointer};
-use contract_ffi::contract_api::{self, PurseTransferResult};
-use contract_ffi::key::Key;
-use contract_ffi::uref::AccessRights;
-use contract_ffi::value::account::PurseId;
-use contract_ffi::value::U512;
+use contract::{
+    contract_api::{runtime, storage},
+    unwrap_or_revert::UnwrapOrRevert,
+};
+use types::{ApiError, Key};
 
-const POS_CONTRACT_NAME: &str = "pos";
-const GET_PAYMENT_PURSE: &str = "get_payment_purse";
-const STANDARD_PAYMENT_CONTRACT_NAME: &str = "standard_payment";
+const DESTINATION_HASH: &str = "hash";
+const DESTINATION_UREF: &str = "uref";
 const PAY_FUNCTION_NAME: &str = "pay";
+const STANDARD_PAYMENT_CONTRACT_NAME: &str = "standard_payment";
 
-enum Arg {
-    Amount = 0,
+#[repr(u16)]
+enum Error {
+    UnknownDestination = 1,
 }
 
-enum Error {
-    GetPosInnerURef = 1,
-    GetPosOuterURef = 2,
-    Transfer = 3,
+impl Into<ApiError> for Error {
+    fn into(self) -> ApiError {
+        ApiError::User(self as u16)
+    }
+}
+
+enum Arg {
+    Destination = 0,
 }
 
 #[no_mangle]
 pub extern "C" fn pay() {
-    let amount: U512 = contract_api::get_arg(Arg::Amount as u32);
-    let main_purse: PurseId = contract_api::main_purse();
+    standard_payment::delegate();
+}
 
-    let pos_pointer: ContractPointer = {
-        let outer: UPointer<Key> = contract_api::get_uref(POS_CONTRACT_NAME)
-            .and_then(Key::to_u_ptr)
-            .unwrap_or_else(|| contract_api::revert(Error::GetPosInnerURef as u32));
-        if let Some(ContractPointer::URef(inner)) = contract_api::read::<Key>(outer).to_c_ptr() {
-            ContractPointer::URef(UPointer::new(inner.0, AccessRights::READ))
-        } else {
-            contract_api::revert(Error::GetPosOuterURef as u32);
-        }
-    };
+fn store_at_hash() -> Key {
+    let named_keys: BTreeMap<String, Key> = BTreeMap::new();
+    let pointer = storage::store_function_at_hash(PAY_FUNCTION_NAME, named_keys);
+    pointer.into()
+}
 
-    let payment_purse: PurseId =
-        contract_api::call_contract(pos_pointer, &(GET_PAYMENT_PURSE,), &vec![]);
-
-    if let PurseTransferResult::TransferError =
-        contract_api::transfer_from_purse_to_purse(main_purse, payment_purse, amount)
-    {
-        contract_api::revert(Error::Transfer as u32);
-    }
+fn store_at_uref() -> Key {
+    let named_keys: BTreeMap<String, Key> = BTreeMap::new();
+    storage::store_function(PAY_FUNCTION_NAME, named_keys)
+        .into_uref()
+        .unwrap_or_revert_with(ApiError::UnexpectedContractRefVariant)
+        .into()
 }
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let known_urefs: BTreeMap<String, Key> = BTreeMap::new();
-    let pointer = contract_api::store_function(PAY_FUNCTION_NAME, known_urefs);
-    contract_api::add_uref(STANDARD_PAYMENT_CONTRACT_NAME, &pointer.into());
+    let destination: String = runtime::get_arg(Arg::Destination as u32)
+        .unwrap_or_revert_with(ApiError::MissingArgument)
+        .unwrap_or_revert_with(ApiError::InvalidArgument);
+
+    let key = match destination.as_str() {
+        DESTINATION_HASH => store_at_hash(),
+        DESTINATION_UREF => store_at_uref(),
+        _ => runtime::revert(Error::UnknownDestination),
+    };
+    runtime::put_key(STANDARD_PAYMENT_CONTRACT_NAME, key);
 }

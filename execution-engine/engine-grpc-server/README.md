@@ -1,9 +1,14 @@
-# COMM #
+# `casperlabs-engine-grpc-server`
 
-This module implements a communication layer for execution engine. It is using gRPC library. Definitions for objects and services come from the `ipc.proto` file that is shared between Scala and Rust subprojects. Rust implements the server part of the gRPC services while Scala implements a client.
+[![LOGO](https://raw.githubusercontent.com/CasperLabs/CasperLabs/master/CASPERLABS_HORIZONTAL.png)](https://casperlabs.io/)
 
-## How to run ##
+[![Build Status](https://drone-auto.casperlabs.io/api/badges/CasperLabs/CasperLabs/status.svg?branch=dev)](http://drone-auto.casperlabs.io/CasperLabs/CasperLabs)
+[![Crates.io](https://img.shields.io/crates/v/casperlabs-engine-grpc-server)](https://crates.io/crates/casperlabs-engine-grpc-server)
+[![Documentation](https://docs.rs/casperlabs-engine-grpc-server/badge.svg)](https://docs.rs/casperlabs-engine-grpc-server)
+[![License](https://img.shields.io/badge/license-COSL-blue.svg)](https://github.com/CasperLabs/CasperLabs/blob/master/LICENSE)
 
-In the root directory of the `comm` project run `cargo run --bin casperlabs-engine-grpc-server <socket>` where `<socket>` is the path to the socket file used for communicating between client and the server.
+Wasm execution engine for CasperLabs smart contracts.
 
-Building `comm` requires that the [Protocol Buffers compiler](https://github.com/protocolbuffers/protobuf) `protoc` is installed and in `$PATH`.
+## License
+
+Licensed under the [CasperLabs Open Source License (COSL)](https://github.com/CasperLabs/CasperLabs/blob/master/LICENSE).

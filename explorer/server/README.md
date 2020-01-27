@@ -20,13 +20,6 @@ Runs the server and the UI in development mode. The UI will proxy to the server 
 
 Build artifacts into the `dist` directory.
 
-The `grpc` directory contains auto-generated files, they were addes as follows:
-
-```console
-cd src
-ln -s ../../grpc/generated grpc
-```
-
 ### `npm run test`
 
 Run unit tests, for example to check the contract ABI serialization format.
@@ -44,7 +37,6 @@ There are some environment variables that can come handy:
 * https://www.fullstackreact.com/articles/using-create-react-app-with-a-server/
 * https://auth0.com/docs/quickstart/spa/vanillajs/02-calling-an-api
 * https://developer.okta.com/blog/2018/11/15/node-express-typescript
-* https://hackernoon.com/interface-grpc-with-web-using-grpc-web-and-envoy-possibly-the-best-way-forward-3ae9671af67
 * https://blog.envoyproxy.io/envoy-and-grpc-web-a-fresh-new-alternative-to-rest-6504ce7eb880
 
 

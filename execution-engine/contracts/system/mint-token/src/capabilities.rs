@@ -1,142 +1,109 @@
-use core::convert::TryFrom;
-use core::marker::PhantomData;
+use core::{convert::TryFrom, marker::PhantomData};
 
-use contract_ffi::contract_api;
-use contract_ffi::contract_api::pointers::UPointer;
-use contract_ffi::key::Key;
-use contract_ffi::uref::{AccessRights, URef};
-use contract_ffi::value::Value;
+use contract::contract_api::{storage, TURef};
+use types::{
+    bytesrepr::{FromBytes, ToBytes},
+    AccessRights, CLTyped, Key,
+};
 
 /// Trait representing the ability to read a value. Use case: a key
-/// for the blockdag global state (`UPointer`) is obviously Readable,
+/// for the blockdag global state (`TURef`) is obviously Readable,
 /// however if we abstract over it then we can write unit tests for
 /// smart contracts much more easily.
 pub trait Readable<T> {
-    fn read(&self) -> T;
-}
-
-macro_rules! readable_impl {
-    ($type:ty) => {
-        impl<T> Readable<T> for $type
-        where
-            T: TryFrom<Value> + Clone,
-        {
-            fn read(&self) -> T {
-                let ptr: UPointer<T> = self.clone().into();
-                contract_api::read(ptr)
-            }
-        }
-    };
+    fn read(self) -> T;
 }
 
 /// Trait representing the ability to write a value. See `Readable`
 /// for use case.
 pub trait Writable<T> {
-    fn write(&self, t: T);
-}
-
-macro_rules! writeable_impl {
-    ($type:ty) => {
-        impl<T> Writable<T> for $type
-        where
-            Value: From<T>,
-            T: Clone,
-        {
-            fn write(&self, t: T) {
-                let ptr: UPointer<T> = self.clone().into();
-                contract_api::write(ptr, t);
-            }
-        }
-    };
+    fn write(self, value: T);
 }
 
 /// Trait representing the ability to add a value `t` to some stored
 /// value of the same type. See `Readable` for use case.
 pub trait Addable<T> {
-    fn add(&self, t: T);
-}
-
-macro_rules! addable_impl {
-    ($type:ty) => {
-        impl<T> Addable<T> for $type
-        where
-            Value: From<T>,
-            T: Clone,
-        {
-            fn add(&self, t: T) {
-                let ptr: UPointer<T> = self.clone().into();
-                contract_api::add(ptr, t);
-            }
-        }
-    };
-}
-
-/// Macro for deriving conversion traits to/from UPointer
-macro_rules! into_try_from_upointer_impl {
-    ($type:ident, $min_access:expr) => {
-        impl<T> TryFrom<UPointer<T>> for $type<T> {
-            type Error = ();
-
-            fn try_from(u: UPointer<T>) -> Result<Self, Self::Error> {
-                let UPointer(id, access, phantom) = u;
-                if access & $min_access == $min_access {
-                    Ok($type(id, phantom))
-                } else {
-                    Err(())
-                }
-            }
-        }
-
-        // Can't implement From<$type<T>> for UPointer<T> because of the
-        // type parameter on UPointer and UPointer is not part of this crate.
-        impl<T> Into<UPointer<T>> for $type<T> {
-            fn into(self) -> UPointer<T> {
-                let access = $min_access;
-                UPointer::new(self.0, access)
-            }
-        }
-    };
-}
-
-/// Macro for deriving conversion traits to/from Key
-macro_rules! from_try_from_key_impl {
-    ($type:ident, $min_access:expr) => {
-        impl<T> TryFrom<Key> for $type<T> {
-            type Error = ();
-
-            fn try_from(k: Key) -> Result<Self, Self::Error> {
-                match k {
-                    Key::URef(uref) if uref.access_rights() >= Some($min_access) => {
-                        Ok($type(uref.addr(), PhantomData))
-                    }
-                    _ => Err(()),
-                }
-            }
-        }
-
-        impl<T> From<$type<T>> for Key {
-            fn from(x: $type<T>) -> Self {
-                let access = $min_access;
-                Key::URef(URef::new(x.0, access))
-            }
-        }
-    };
+    fn add(self, value: T);
 }
 
 /// Add-only URef
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
-pub struct ARef<T>(pub [u8; 32], PhantomData<T>);
+pub struct RefWithAddRights<T>([u8; 32], PhantomData<T>);
 
-into_try_from_upointer_impl!(ARef, AccessRights::ADD);
-from_try_from_key_impl!(ARef, AccessRights::ADD);
-addable_impl!(ARef<T>);
+impl<T> RefWithAddRights<T> {
+    const fn access_rights() -> AccessRights {
+        AccessRights::ADD
+    }
+}
 
-/// Read+Write URef
+impl<T> TryFrom<Key> for RefWithAddRights<T> {
+    type Error = ();
+
+    fn try_from(key: Key) -> Result<Self, Self::Error> {
+        match key {
+            Key::URef(uref) if uref.access_rights() >= Some(Self::access_rights()) => {
+                Ok(RefWithAddRights(uref.addr(), PhantomData))
+            }
+            _ => Err(()),
+        }
+    }
+}
+
+impl<T: CLTyped + ToBytes> Addable<T> for RefWithAddRights<T> {
+    fn add(self, value: T) {
+        let turef = TURef::<T>::new(self.0, Self::access_rights());
+        storage::add(turef, value);
+    }
+}
+
+/// Read, Add, Write URef
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
-pub struct RAWRef<T>(pub [u8; 32], PhantomData<T>);
+pub struct RefWithReadAddWriteRights<T>([u8; 32], PhantomData<T>);
 
-into_try_from_upointer_impl!(RAWRef, AccessRights::READ_ADD_WRITE);
-from_try_from_key_impl!(RAWRef, AccessRights::READ_ADD_WRITE);
-readable_impl!(RAWRef<T>);
-addable_impl!(RAWRef<T>);
-writeable_impl!(RAWRef<T>);
+impl<T> RefWithReadAddWriteRights<T> {
+    const fn access_rights() -> AccessRights {
+        AccessRights::READ_ADD_WRITE
+    }
+}
+
+impl<T: CLTyped> Into<TURef<T>> for RefWithReadAddWriteRights<T> {
+    fn into(self) -> TURef<T> {
+        TURef::new(self.0, Self::access_rights())
+    }
+}
+
+impl<T> TryFrom<Key> for RefWithReadAddWriteRights<T> {
+    type Error = ();
+
+    fn try_from(key: Key) -> Result<Self, Self::Error> {
+        match key {
+            Key::URef(uref) if uref.access_rights() >= Some(Self::access_rights()) => {
+                Ok(RefWithReadAddWriteRights(uref.addr(), PhantomData))
+            }
+            _ => Err(()),
+        }
+    }
+}
+
+impl<T: CLTyped + FromBytes> Readable<T> for RefWithReadAddWriteRights<T> {
+    fn read(self) -> T {
+        let turef = self.into();
+        storage::read(turef)
+            .expect("value should deserialize")
+            .expect("should find value")
+    }
+}
+
+impl<T: CLTyped + ToBytes> Writable<T> for RefWithReadAddWriteRights<T> {
+    fn write(self, value: T) {
+        let turef = self.into();
+        storage::write(turef, value);
+    }
+}
+
+impl<T: CLTyped + ToBytes + FromBytes> Addable<T> for RefWithReadAddWriteRights<T> {
+    fn add(self, value: T) {
+        let turef = self.into();
+        storage::add(turef, value);
+    }
+}

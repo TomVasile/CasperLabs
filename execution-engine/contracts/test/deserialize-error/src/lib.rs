@@ -1,20 +1,14 @@
 #![no_std]
-#![feature(cell_update)]
 
-#[macro_use]
 extern crate alloc;
 
-extern crate contract_ffi;
-extern crate core;
+// Can be removed once https://github.com/rust-lang/rustfmt/issues/3362 is resolved.
+#[rustfmt::skip]
+use alloc::vec;
+use alloc::{collections::BTreeMap, vec::Vec};
 
-use alloc::collections::btree_map::BTreeMap;
-use alloc::vec::Vec;
-
-use contract_ffi::bytesrepr::ToBytes;
-use contract_ffi::contract_api;
-use contract_ffi::contract_api::argsparser::ArgsParser;
-use contract_ffi::contract_api::pointers::ContractPointer;
-use contract_ffi::key::Key;
+use contract::{args_parser::ArgsParser, contract_api::storage};
+use types::{bytesrepr::ToBytes, ContractRef, Key};
 
 #[no_mangle]
 pub extern "C" fn do_nothing() {
@@ -23,8 +17,8 @@ pub extern "C" fn do_nothing() {
 }
 
 // Attacker copied to_ptr from `alloc_utils` as it was private
-fn to_ptr<T: ToBytes>(t: &T) -> (*const u8, usize, Vec<u8>) {
-    let bytes = t.to_bytes().expect("Unable to serialize data");
+fn to_ptr<T: ToBytes>(t: T) -> (*const u8, usize, Vec<u8>) {
+    let bytes = t.into_bytes().expect("Unable to serialize data");
     let ptr = bytes.as_ptr();
     let size = bytes.len();
     (ptr, size, bytes)
@@ -44,12 +38,12 @@ mod malicious_ffi {
     }
 }
 
-// This is half-baked contract_api::call_contract with changed `extra_urefs`
+// This is half-baked runtime::call_contract with changed `extra_urefs`
 // parameter with a desired payload that's supposed to bring the node down.
-fn my_call_contract<A: ArgsParser>(c_ptr: ContractPointer, args: &A) {
+fn my_call_contract<A: ArgsParser>(c_ptr: ContractRef, args: A) {
     let contract_key: Key = c_ptr.into();
-    let (key_ptr, key_size, _bytes1) = to_ptr(&contract_key);
-    let (args_ptr, args_size, _bytes2) = ArgsParser::parse(args).map(|args| to_ptr(&args)).unwrap();
+    let (key_ptr, key_size, _bytes1) = to_ptr(contract_key);
+    let (args_ptr, args_size, _bytes2) = ArgsParser::parse(args).map(to_ptr).unwrap();
 
     let mut extra_urefs = vec![255, 255, 255, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let _res_size = unsafe {
@@ -66,6 +60,6 @@ fn my_call_contract<A: ArgsParser>(c_ptr: ContractPointer, args: &A) {
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let do_nothing: ContractPointer = contract_api::store_function("do_nothing", BTreeMap::new());
-    my_call_contract(do_nothing.clone(), &());
+    let do_nothing: ContractRef = storage::store_function_at_hash("do_nothing", BTreeMap::new());
+    my_call_contract(do_nothing, ());
 }

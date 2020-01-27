@@ -1,11 +1,14 @@
-use contract_ffi::bytesrepr;
-use contract_ffi::bytesrepr::{FromBytes, ToBytes, U32_SIZE};
+use std::collections::BTreeMap;
+
+use pwasm_utils::rules::{InstructionType, Metering, Set};
+
+use types::bytesrepr::{self, FromBytes, ToBytes, U32_SERIALIZED_LENGTH};
 
 const NUM_FIELDS: usize = 10;
-pub const WASM_COSTS_SIZE_SERIALIZED: usize = NUM_FIELDS * U32_SIZE;
+pub const WASM_COSTS_SERIALIZED_LENGTH: usize = NUM_FIELDS * U32_SERIALIZED_LENGTH;
 
 // Taken (partially) from parity-ethereum
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct WasmCosts {
     /// Default opcode cost
     pub regular: u32,
@@ -33,43 +36,24 @@ pub struct WasmCosts {
 }
 
 impl WasmCosts {
-    pub fn from_version(protocol_version: u64) -> Option<WasmCosts> {
-        match protocol_version {
-            1 => Some(WasmCosts {
-                regular: 1,
-                div: 16,
-                mul: 4,
-                mem: 2,
-                initial_mem: 4096,
-                grow_mem: 8192,
-                memcpy: 1,
-                max_stack_height: 64 * 1024,
-                opcodes_mul: 3,
-                opcodes_div: 8,
-            }),
-            _ => None,
-        }
-    }
-
-    pub fn free() -> WasmCosts {
-        WasmCosts {
-            regular: 0,
-            div: 0,
-            mul: 0,
-            mem: 0,
-            initial_mem: 4096,
-            grow_mem: 8192,
-            memcpy: 0,
-            max_stack_height: 64 * 1024,
-            opcodes_mul: 1,
-            opcodes_div: 1,
-        }
+    pub(crate) fn to_set(&self) -> Set {
+        let meterings = {
+            let mut tmp = BTreeMap::new();
+            tmp.insert(InstructionType::Load, Metering::Fixed(self.mem));
+            tmp.insert(InstructionType::Store, Metering::Fixed(self.mem));
+            tmp.insert(InstructionType::Div, Metering::Fixed(self.div));
+            tmp.insert(InstructionType::Mul, Metering::Fixed(self.mul));
+            tmp
+        };
+        Set::new(self.regular, meterings)
+            .with_grow_cost(self.grow_mem)
+            .with_forbidden_floats()
     }
 }
 
 impl ToBytes for WasmCosts {
     fn to_bytes(&self) -> Result<Vec<u8>, bytesrepr::Error> {
-        let mut ret: Vec<u8> = Vec::with_capacity(WASM_COSTS_SIZE_SERIALIZED);
+        let mut ret: Vec<u8> = Vec::with_capacity(WASM_COSTS_SERIALIZED_LENGTH);
         ret.append(&mut self.regular.to_bytes()?);
         ret.append(&mut self.div.to_bytes()?);
         ret.append(&mut self.mul.to_bytes()?);
@@ -113,8 +97,7 @@ impl FromBytes for WasmCosts {
 }
 
 pub mod gens {
-    use proptest::num;
-    use proptest::prop_compose;
+    use proptest::{num, prop_compose};
 
     use crate::wasm_costs::WasmCosts;
 
@@ -152,15 +135,16 @@ mod tests {
     use proptest::proptest;
 
     use engine_shared::test_utils;
+    use types::bytesrepr;
 
-    use super::{gens, WasmCosts};
+    use super::gens;
 
     #[test]
     fn should_serialize_and_deserialize() {
-        let v1 = WasmCosts::from_version(1).unwrap();
-        let free = WasmCosts::free();
-        assert!(test_utils::test_serialization_roundtrip(&v1));
-        assert!(test_utils::test_serialization_roundtrip(&free));
+        let mock = test_utils::wasm_costs_mock();
+        let free = test_utils::wasm_costs_free();
+        bytesrepr::test_serialization_roundtrip(&mock);
+        bytesrepr::test_serialization_roundtrip(&free);
     }
 
     proptest! {
@@ -168,7 +152,7 @@ mod tests {
         fn should_serialize_and_deserialize_with_arbitrary_values(
             wasm_costs in gens::wasm_costs_arb()
         ) {
-            assert!(test_utils::test_serialization_roundtrip(&wasm_costs));
+            bytesrepr::test_serialization_roundtrip(&wasm_costs);
         }
     }
 }

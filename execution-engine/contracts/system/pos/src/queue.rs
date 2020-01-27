@@ -1,13 +1,13 @@
-use alloc::vec::Vec;
-use core::convert::TryFrom;
+use alloc::{boxed::Box, vec::Vec};
 use core::result;
 
-use contract_ffi::bytesrepr::{self, FromBytes, ToBytes};
-use contract_ffi::contract_api;
-use contract_ffi::value::account::{BlockTime, PublicKey};
-use contract_ffi::value::{Value, U512};
-
-use crate::error::{Error, Result};
+use contract::contract_api::storage;
+use types::{
+    account::PublicKey,
+    bytesrepr::{self, FromBytes, ToBytes},
+    system_contract_errors::pos::{Error, Result},
+    BlockTime, CLType, CLTyped, U512,
+};
 
 const BONDING_KEY: u8 = 1;
 const UNBONDING_KEY: u8 = 2;
@@ -57,6 +57,12 @@ impl ToBytes for QueueEntry {
     }
 }
 
+impl CLTyped for QueueEntry {
+    fn cl_type() -> CLType {
+        CLType::Any
+    }
+}
+
 pub trait QueueProvider {
     /// Reads bonding queue.
     fn read_bonding() -> Queue;
@@ -65,10 +71,10 @@ pub trait QueueProvider {
     fn read_unbonding() -> Queue;
 
     /// Writes bonding queue.
-    fn write_bonding(queue: &Queue);
+    fn write_bonding(queue: Queue);
 
     /// Writes unbonding queue.
-    fn write_unbonding(queue: &Queue);
+    fn write_unbonding(queue: Queue);
 }
 
 /// A `QueueProvider` that reads and writes the queue to/from the contract's
@@ -78,22 +84,26 @@ pub struct QueueLocal;
 impl QueueProvider for QueueLocal {
     /// Reads bonding queue from the local state of the contract.
     fn read_bonding() -> Queue {
-        contract_api::read_local(BONDING_KEY).unwrap_or_default()
+        storage::read_local(&BONDING_KEY)
+            .unwrap_or_default()
+            .unwrap_or_default()
     }
 
     /// Reads unbonding queue from the local state of the contract.
     fn read_unbonding() -> Queue {
-        contract_api::read_local(UNBONDING_KEY).unwrap_or_default()
+        storage::read_local(&UNBONDING_KEY)
+            .unwrap_or_default()
+            .unwrap_or_default()
     }
 
     /// Writes bonding queue to the local state of the contract.
-    fn write_bonding(queue: &Queue) {
-        contract_api::write_local(BONDING_KEY, queue);
+    fn write_bonding(queue: Queue) {
+        storage::write_local(BONDING_KEY, queue);
     }
 
     /// Writes unbonding queue to the local state of the contract.
-    fn write_unbonding(queue: &Queue) {
-        contract_api::write_local(UNBONDING_KEY, queue);
+    fn write_unbonding(queue: Queue) {
+        storage::write_local(UNBONDING_KEY, queue);
     }
 }
 
@@ -130,29 +140,6 @@ impl Queue {
     }
 }
 
-impl TryFrom<Value> for Queue {
-    type Error = Error;
-
-    fn try_from(value: Value) -> Result<Self> {
-        let bytes = match value {
-            Value::ByteArray(bytes) => bytes,
-            _ => return Err(Error::QueueNotStoredAsByteArray),
-        };
-        let (queue, rest) =
-            Queue::from_bytes(&bytes).map_err(|_| Error::QueueDeserializationFailed)?;
-        if !rest.is_empty() {
-            return Err(Error::QueueDeserializationExtraBytes);
-        }
-        Ok(queue)
-    }
-}
-
-impl Into<Value> for &Queue {
-    fn into(self) -> Value {
-        Value::ByteArray(self.to_bytes().expect("Serialization cannot fail"))
-    }
-}
-
 impl FromBytes for Queue {
     fn from_bytes(bytes: &[u8]) -> result::Result<(Self, &[u8]), bytesrepr::Error> {
         let (len, mut bytes) = u64::from_bytes(bytes)?;
@@ -170,18 +157,22 @@ impl ToBytes for Queue {
     fn to_bytes(&self) -> result::Result<Vec<u8>, bytesrepr::Error> {
         let mut bytes = (self.0.len() as u64).to_bytes()?; // TODO: Allocate correct capacity.
         for entry in &self.0 {
-            bytes.extend(entry.to_bytes()?);
+            bytes.append(&mut entry.to_bytes()?);
         }
         Ok(bytes)
     }
 }
 
+impl CLTyped for Queue {
+    fn cl_type() -> CLType {
+        CLType::List(Box::new(QueueEntry::cl_type()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use contract_ffi::value::account::{BlockTime, PublicKey};
-    use contract_ffi::value::U512;
+    use types::{account::PublicKey, system_contract_errors::pos::Error, BlockTime, U512};
 
-    use crate::error::Error;
     use crate::queue::{Queue, QueueEntry};
 
     const KEY1: [u8; 32] = [1; 32];
@@ -194,15 +185,15 @@ mod tests {
         let val2 = PublicKey::new(KEY2);
         let val3 = PublicKey::new(KEY3);
         let mut queue: Queue = Default::default();
-        assert_eq!(Ok(()), queue.push(val1, U512::from(5), BlockTime(100)));
-        assert_eq!(Ok(()), queue.push(val2, U512::from(5), BlockTime(101)));
+        assert_eq!(Ok(()), queue.push(val1, U512::from(5), BlockTime::new(100)));
+        assert_eq!(Ok(()), queue.push(val2, U512::from(5), BlockTime::new(101)));
         assert_eq!(
             Err(Error::MultipleRequests),
-            queue.push(val1, U512::from(5), BlockTime(102))
+            queue.push(val1, U512::from(5), BlockTime::new(102))
         );
         assert_eq!(
             Err(Error::TimeWentBackwards),
-            queue.push(val3, U512::from(5), BlockTime(100))
+            queue.push(val3, U512::from(5), BlockTime::new(100))
         );
     }
 
@@ -212,19 +203,19 @@ mod tests {
         let val2 = PublicKey::new(KEY2);
         let val3 = PublicKey::new(KEY3);
         let mut queue: Queue = Default::default();
-        assert_eq!(Ok(()), queue.push(val1, U512::from(5), BlockTime(100)));
-        assert_eq!(Ok(()), queue.push(val2, U512::from(6), BlockTime(101)));
-        assert_eq!(Ok(()), queue.push(val3, U512::from(7), BlockTime(102)));
+        assert_eq!(Ok(()), queue.push(val1, U512::from(5), BlockTime::new(100)));
+        assert_eq!(Ok(()), queue.push(val2, U512::from(6), BlockTime::new(101)));
+        assert_eq!(Ok(()), queue.push(val3, U512::from(7), BlockTime::new(102)));
         assert_eq!(
             vec![
-                QueueEntry::new(val1, U512::from(5), BlockTime(100)),
-                QueueEntry::new(val2, U512::from(6), BlockTime(101)),
+                QueueEntry::new(val1, U512::from(5), BlockTime::new(100)),
+                QueueEntry::new(val2, U512::from(6), BlockTime::new(101)),
             ],
-            queue.pop_due(BlockTime(101))
+            queue.pop_due(BlockTime::new(101))
         );
         assert_eq!(
-            vec![QueueEntry::new(val3, U512::from(7), BlockTime(102)),],
-            queue.pop_due(BlockTime(105))
+            vec![QueueEntry::new(val3, U512::from(7), BlockTime::new(102)),],
+            queue.pop_due(BlockTime::new(105))
         );
     }
 }

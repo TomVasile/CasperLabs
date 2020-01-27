@@ -1,29 +1,26 @@
 #![no_std]
-#![feature(cell_update)]
 
 extern crate alloc;
-extern crate contract_ffi;
 
-use alloc::string::String;
+use alloc::string::ToString;
 
-use contract_ffi::contract_api;
-use contract_ffi::contract_api::pointers::{ContractPointer, UPointer};
-use contract_ffi::uref::URef;
-
-const CONTRACT_HASH: [u8; 32] = [
-    94, 95, 50, 162, 218, 237, 110, 252, 109, 151, 87, 89, 218, 215, 97, 65, 124, 183, 21, 252,
-    197, 6, 112, 204, 31, 83, 118, 122, 225, 214, 26, 52,
-];
+use contract::{
+    contract_api::{runtime, storage, TURef},
+    unwrap_or_revert::UnwrapOrRevert,
+};
+use types::{ApiError, ContractRef, Key, URef};
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let contract_pointer = ContractPointer::Hash(CONTRACT_HASH);
+    let contract_key: Key = runtime::get_key("hello_ext").unwrap_or_revert_with(ApiError::GetKey);
+    let contract_pointer: ContractRef = match contract_key {
+        Key::Hash(hash) => ContractRef::Hash(hash),
+        _ => runtime::revert(ApiError::UnexpectedKeyVariant),
+    };
 
-    let extra_urefs = [].to_vec();
+    let result: URef = runtime::call_contract(contract_pointer, ());
 
-    let result: URef = contract_api::call_contract(contract_pointer, &(), &extra_urefs);
+    let value = storage::read(TURef::from_uref(result).unwrap());
 
-    let value: String = contract_api::read(UPointer::from_uref(result).unwrap());
-
-    assert_eq!("Hello, world!", &value);
+    assert_eq!(Ok(Some("Hello, world!".to_string())), value);
 }

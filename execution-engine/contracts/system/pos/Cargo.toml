@@ -5,12 +5,15 @@ authors = ["Andreas Fackler <andreas@casperlabs.io>"]
 edition = "2018"
 
 [lib]
-name = "pos"
-crate-type = ["cdylib"]
+crate-type = ["lib", "cdylib"]
+bench = false
+doctest = false
 
 [features]
-default = []
-std = ["contract-ffi/std"]
+std = ["contract/std", "types/std"]
+lib = []
 
 [dependencies]
-contract-ffi = { path = "../../../contract-ffi", package = "casperlabs-contract-ffi" }
+base16 = { version = "0.2.1", default-features = false }
+contract = { path = "../../../contract", package = "casperlabs-contract" }
+types = { path = "../../../types", package = "casperlabs-types" }

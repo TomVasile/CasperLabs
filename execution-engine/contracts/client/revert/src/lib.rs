@@ -1,10 +1,9 @@
 #![no_std]
 
-extern crate contract_ffi;
-
-use contract_ffi::contract_api;
+use contract::contract_api::runtime;
+use types::ApiError;
 
 #[no_mangle]
 pub extern "C" fn call() {
-    contract_api::revert(100)
+    runtime::revert(ApiError::User(100))
 }

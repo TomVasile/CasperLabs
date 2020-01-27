@@ -1,11 +1,12 @@
 package io.casperlabs.comm.discovery
 
+import cats.Parallel
 import cats.effect._
 import cats.implicits._
-import cats.temp.par._
 import io.casperlabs.catscontrib.TaskContrib.ConcurrentOps
 import io.casperlabs.catscontrib.ski._
 import io.casperlabs.comm.CachedConnections.ConnectionsCache
+import io.casperlabs.comm.ServiceError.Unauthenticated
 import io.casperlabs.comm._
 import io.casperlabs.comm.discovery.KademliaGrpcMonix.KademliaServiceStub
 import io.casperlabs.comm.discovery.NodeUtils._
@@ -19,7 +20,7 @@ import monix.execution._
 
 import scala.concurrent.duration._
 
-class GrpcKademliaService[F[_]: Concurrent: TaskLift: Timer: TaskLike: Log: NodeAsk: Metrics: Par](
+class GrpcKademliaService[F[_]: Concurrent: TaskLift: Timer: TaskLike: Log: NodeAsk: Metrics: Parallel](
     port: Int,
     timeout: FiniteDuration,
     ingressScheduler: Scheduler,
@@ -29,7 +30,6 @@ class GrpcKademliaService[F[_]: Concurrent: TaskLift: Timer: TaskLike: Log: Node
     connectionsCache: ConnectionsCache[F, KademliaConnTag]
 ) extends KademliaService[F] {
 
-  private implicit val logSource: LogSource = LogSource(this.getClass)
   private implicit val metricsSource: Metrics.Source =
     Metrics.Source(CommMetricsSource, "discovery.kademlia.grpc")
 
@@ -65,7 +65,7 @@ class GrpcKademliaService[F[_]: Concurrent: TaskLift: Timer: TaskLike: Log: Node
     cell.modify { s =>
       s.connections.get(peer).fold(s.pure[F]) { connection =>
         for {
-          _ <- Log[F].debug(s"Disconnecting from peer ${peer.show}")
+          _ <- Log[F].debug(s"Disconnecting from ${peer.show -> "peer"}")
           _ <- Sync[F].delay(connection.shutdownNow()).attempt
         } yield s.copy(connections = s.connections - peer)
       }
@@ -124,7 +124,7 @@ class GrpcKademliaService[F[_]: Concurrent: TaskLift: Timer: TaskLike: Log: Node
 
   private def clientChannel(peer: Node): F[ManagedChannel] =
     for {
-      _ <- Log[F].debug(s"Creating new channel to peer ${peer.show}")
+      _ <- Log[F].debug(s"Creating new channel to ${peer.show -> "peer"}")
       c <- Sync[F].delay {
             NettyChannelBuilder
               .forAddress(peer.host, peer.discoveryPort)
@@ -141,13 +141,24 @@ class GrpcKademliaService[F[_]: Concurrent: TaskLift: Timer: TaskLike: Log: Node
 
     def lookup(lookup: LookupRequest): Task[LookupResponse] = {
       val id = NodeIdentifier(lookup.id)
-      TaskLike[F].toTask(
+      TaskLike[F].apply(
         lookupHandler(lookup.sender.get, id)
+          .adaptError {
+            case e: IllegalArgumentException if e.getMessage.contains("Wrong chain id") =>
+              Unauthenticated(e.getMessage)
+          }
           .map(peers => LookupResponse().withNodes(peers))
       )
     }
 
     def ping(ping: PingRequest): Task[PingResponse] =
-      TaskLike[F].toTask(pingHandler(ping.sender.get).as(PingResponse()))
+      TaskLike[F].apply(
+        pingHandler(ping.sender.get)
+          .adaptError {
+            case e: IllegalArgumentException if e.getMessage.contains("Wrong chain id") =>
+              Unauthenticated(e.getMessage)
+          }
+          .as(PingResponse())
+      )
   }
 }

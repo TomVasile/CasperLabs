@@ -1,10 +1,13 @@
 use lmdb::{Database, DatabaseFlags};
+use types::ProtocolVersion;
 
-use crate::protocol_data::ProtocolData;
-use crate::protocol_data_store::{ProtocolDataStore, ProtocolVersion};
-use crate::store::Store;
-use crate::transaction_source::lmdb::LmdbEnvironment;
-use crate::{error, protocol_data_store};
+use crate::{
+    error,
+    protocol_data::ProtocolData,
+    protocol_data_store::{self, ProtocolDataStore},
+    store::Store,
+    transaction_source::lmdb::LmdbEnvironment,
+};
 
 /// An LMDB-backed protocol data store.
 ///
@@ -20,16 +23,21 @@ impl LmdbProtocolDataStore {
         maybe_name: Option<&str>,
         flags: DatabaseFlags,
     ) -> Result<Self, error::Error> {
-        let name = maybe_name
-            .map(|name| format!("{}-{}", protocol_data_store::NAME, name))
-            .unwrap_or_else(|| String::from(protocol_data_store::NAME));
+        let name = Self::name(maybe_name);
         let db = env.env().create_db(Some(&name), flags)?;
         Ok(LmdbProtocolDataStore { db })
     }
 
-    pub fn open(env: &LmdbEnvironment, name: Option<&str>) -> Result<Self, error::Error> {
-        let db = env.env().open_db(name)?;
+    pub fn open(env: &LmdbEnvironment, maybe_name: Option<&str>) -> Result<Self, error::Error> {
+        let name = Self::name(maybe_name);
+        let db = env.env().open_db(Some(&name))?;
         Ok(LmdbProtocolDataStore { db })
+    }
+
+    fn name(maybe_name: Option<&str>) -> String {
+        maybe_name
+            .map(|name| format!("{}-{}", protocol_data_store::NAME, name))
+            .unwrap_or_else(|| String::from(protocol_data_store::NAME))
     }
 }
 

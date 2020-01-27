@@ -1,22 +1,23 @@
-use contract_ffi::value::U512;
-use std::collections::HashMap;
+use engine_shared::transform::Transform;
+use engine_test_support::low_level::{
+    ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG,
+};
+use types::U512;
 
-use crate::support::test_support::{WasmTestBuilder, DEFAULT_BLOCK_TIME};
-
-const GENESIS_ADDR: [u8; 32] = [6u8; 32];
+const CONTRACT_EE_460_REGRESSION: &str = "ee_460_regression.wasm";
 
 #[ignore]
 #[test]
 fn should_run_ee_460_no_side_effects_on_error_regression() {
-    let result = WasmTestBuilder::default()
-        .run_genesis(GENESIS_ADDR, HashMap::new())
-        .exec_with_args(
-            GENESIS_ADDR,
-            "ee_460_regression.wasm",
-            DEFAULT_BLOCK_TIME,
-            1,
-            (U512::max_value(),),
-        )
+    let exec_request_1 = ExecuteRequestBuilder::standard(
+        DEFAULT_ACCOUNT_ADDR,
+        CONTRACT_EE_460_REGRESSION,
+        (U512::max_value(),),
+    )
+    .build();
+    let result = InMemoryWasmTestBuilder::default()
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request_1)
         .expect_success()
         .commit()
         .finish();
@@ -28,5 +29,10 @@ fn should_run_ee_460_no_side_effects_on_error_regression() {
     let mint_contract_uref = result.builder().get_mint_contract_uref();
 
     let transforms = &result.builder().get_transforms()[0];
-    assert!(transforms.get(&mint_contract_uref.into()).is_none());
+    let mint_transforms = transforms
+        .get(&mint_contract_uref.into())
+        // Skips the Identity writes introduced since payment code execution for brevity of the
+        // check
+        .filter(|&v| v != &Transform::Identity);
+    assert!(mint_transforms.is_none());
 }

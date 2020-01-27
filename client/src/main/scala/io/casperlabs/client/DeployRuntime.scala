@@ -2,23 +2,27 @@ package io.casperlabs.client
 import java.io._
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
+import java.nio.file.{Files, Path}
 
 import cats.Show
-import cats.effect.{Sync, Timer}
+import cats.effect.{Resource, Sync, Timer}
 import cats.implicits._
 import com.google.protobuf.ByteString
 import guru.nidi.graphviz.engine._
 import io.casperlabs.casper.consensus
 import io.casperlabs.casper.consensus.Deploy
+import io.casperlabs.casper.consensus.state
 import io.casperlabs.catscontrib.MonadThrowable
-import io.casperlabs.client.configuration.{Contracts, Streaming}
+import io.casperlabs.client.configuration.{DeployConfig, Streaming}
 import io.casperlabs.crypto.Keys.{PrivateKey, PublicKey}
 import io.casperlabs.crypto.codec.{Base16, Base64}
 import io.casperlabs.crypto.hash.Blake2b256
 import io.casperlabs.crypto.signatures.SignatureAlgorithm.Ed25519
+import io.casperlabs.crypto.util.{CertificateHelper, CertificatePrinter}
 import io.casperlabs.shared.FilesAPI
+import io.casperlabs.models.DeployImplicits._
 import org.apache.commons.io._
+import scalapb_circe.JsonFormat
 
 import scala.concurrent.duration._
 import scala.language.higherKinds
@@ -29,6 +33,7 @@ object DeployRuntime {
   val BONDING_WASM_FILE   = "bonding.wasm"
   val UNBONDING_WASM_FILE = "unbonding.wasm"
   val TRANSFER_WASM_FILE  = "transfer_to_account.wasm"
+  val PAYMENT_WASM_FILE   = "standard_payment.wasm"
 
   def propose[F[_]: Sync: DeployService](
       exit: Boolean = true,
@@ -42,77 +47,123 @@ object DeployRuntime {
       ignoreOutput
     )
 
-  def showBlock[F[_]: Sync: DeployService](hash: String): F[Unit] =
-    gracefulExit(DeployService[F].showBlock(hash).map(_.map(Printer.printToUnicodeString)))
+  def showBlock[F[_]: Sync: DeployService](
+      hash: String,
+      bytesStandard: Boolean,
+      json: Boolean
+  ): F[Unit] =
+    gracefulExit(
+      DeployService[F]
+        .showBlock(hash)
+        .map(_.map(Printer.print(_, bytesStandard, json)))
+    )
 
-  def showDeploys[F[_]: Sync: DeployService](hash: String): F[Unit] =
-    gracefulExit(DeployService[F].showDeploys(hash))
+  def showDeploys[F[_]: Sync: DeployService](
+      hash: String,
+      bytesStandard: Boolean,
+      json: Boolean
+  ): F[Unit] =
+    gracefulExit(DeployService[F].showDeploys(hash, bytesStandard, json))
 
-  def showDeploy[F[_]: Sync: DeployService](hash: String): F[Unit] =
-    gracefulExit(DeployService[F].showDeploy(hash))
+  def showDeploy[F[_]: Sync: DeployService](
+      hash: String,
+      bytesStandard: Boolean,
+      json: Boolean
+  ): F[Unit] =
+    gracefulExit(DeployService[F].showDeploy(hash, bytesStandard, json))
 
-  def showBlocks[F[_]: Sync: DeployService](depth: Int): F[Unit] =
-    gracefulExit(DeployService[F].showBlocks(depth))
+  def showBlocks[F[_]: Sync: DeployService](
+      depth: Int,
+      bytesStandard: Boolean,
+      json: Boolean
+  ): F[Unit] =
+    gracefulExit(DeployService[F].showBlocks(depth, bytesStandard, json))
+
+  private def optionalArg[T](name: String, maybeValue: Option[T])(
+      f: T => Deploy.Arg.Value.Value
+  ) = {
+    val value: Deploy.Arg.Value.Value = maybeValue match {
+      case None    => Deploy.Arg.Value.Value.Empty
+      case Some(x) => f(x)
+    }
+    Deploy
+      .Arg(name)
+      .withValue(
+        Deploy.Arg.Value().withOptionalValue(Deploy.Arg.Value(value))
+      )
+  }
+
+  private def arg[T](name: String, value: Deploy.Arg.Value.Value) =
+    Deploy
+      .Arg(name)
+      .withValue(Deploy.Arg.Value(value))
+
+  private def longArg(name: String, value: Long) =
+    arg(name, Deploy.Arg.Value.Value.LongValue(value))
+
+  private def bigIntArg(name: String, value: BigInt) =
+    arg(name, Deploy.Arg.Value.Value.BigInt(state.BigInt(value.toString, bitWidth = 512)))
+
+  private def bytesArg(name: String, value: Array[Byte]) =
+    arg(name, Deploy.Arg.Value.Value.BytesValue(ByteString.copyFrom(value)))
+
+  // This is true for any array but I didn't want to go as far as writing type classes.
+  private def serializeArray(ba: Array[Byte]): Array[Byte] =
+    ba
 
   def unbond[F[_]: Sync: DeployService](
       maybeAmount: Option[Long],
-      nonce: Long,
-      contracts: Contracts,
+      deployConfig: DeployConfig,
       privateKeyFile: File
-  ): F[Unit] = {
-    val args: Array[Array[Byte]] = Array(
-      serializeOption(maybeAmount, serializeLong)
-    )
-    val argsSer = serializeArgs(args)
-
+  ): F[Unit] =
     for {
       rawPrivateKey <- readFileAsString[F](privateKeyFile)
       _ <- deployFileProgram[F](
             from = None,
-            nonce = nonce,
-            contracts.withSessionResource(UNBONDING_WASM_FILE),
+            deployConfig.withSessionResource(UNBONDING_WASM_FILE),
             maybeEitherPublicKey = None,
             maybeEitherPrivateKey = rawPrivateKey.asLeft[PrivateKey].some,
-            gasPrice = 10L, // gas price is fixed at the moment for 10:1
-            sessionArgs = argsSer
+            sessionArgs =
+              List(optionalArg("amount", maybeAmount)(Deploy.Arg.Value.Value.LongValue(_)))
           )
     } yield ()
-  }
 
   def bond[F[_]: Sync: DeployService](
       amount: Long,
-      nonce: Long,
-      contracts: Contracts,
+      deployConfig: DeployConfig,
       privateKeyFile: File
-  ): F[Unit] = {
-    val args: Array[Array[Byte]] = Array(serializeLong(amount))
-    val argsSer: Array[Byte]     = serializeArgs(args)
-
+  ): F[Unit] =
     for {
       rawPrivateKey <- readFileAsString[F](privateKeyFile)
       _ <- deployFileProgram[F](
             from = None,
-            nonce = nonce,
-            contracts.withSessionResource(BONDING_WASM_FILE),
+            deployConfig.withSessionResource(BONDING_WASM_FILE),
             maybeEitherPublicKey = None,
             maybeEitherPrivateKey = rawPrivateKey.asLeft[PrivateKey].some,
-            gasPrice = 10L, // gas price is fixed at the moment for 10:1
-            sessionArgs = argsSer
+            sessionArgs = List(longArg("amount", amount))
           )
     } yield ()
-  }
 
   def queryState[F[_]: Sync: DeployService](
       blockHash: String,
       keyVariant: String,
       keyValue: String,
-      path: String
+      path: String,
+      bytesStandard: Boolean,
+      json: Boolean
   ): F[Unit] =
-    gracefulExit(
+    gracefulExit({
+      val key = if (keyVariant == "local") {
+        val parts          = keyValue.split(":")
+        val seed           = parts(0)
+        val rest           = parts(1)
+        val abiEncodedRest = Base16.encode(serializeArray(Base16.decode(rest)))
+        s"$seed:$abiEncodedRest"
+      } else keyValue
       DeployService[F]
-        .queryState(blockHash, keyVariant, keyValue, path)
-        .map(_.map(Printer.printToUnicodeString(_)))
-    )
+        .queryState(blockHash, keyVariant, key, path)
+        .map(_.map(Printer.print(_, bytesStandard, json)))
+    })
 
   def balance[F[_]: Sync: DeployService](address: String, blockHash: String): F[Unit] =
     gracefulExit {
@@ -123,27 +174,19 @@ object DeployRuntime {
               .whenA(!value.value.isAccount)
         account = value.getAccount
         mintPublic <- Sync[F].fromOption(
-                       account.knownUrefs.find(_.name == "mint").flatMap(_.key),
+                       account.namedKeys.find(_.name == "mint").flatMap(_.key),
                        new IllegalStateException(
                          "Account's known_urefs map did not contain Mint contract address."
                        )
                      )
-        mintPrivate <- DeployService[F]
-                        .queryState(
-                          blockHash,
-                          "uref",
-                          Base16.encode(mintPublic.getUref.uref.toByteArray), // I am assuming that "mint" points to URef type key.
-                          ""
-                        )
-                        .rethrow
         localKeyValue = {
-          val mintPrivateHex = Base16.encode(mintPrivate.getKey.getUref.uref.toByteArray) // Assuming that `mint_private` is of `URef` type.
+          val mintPublicHex = Base16.encode(mintPublic.getUref.uref.toByteArray) // Assuming that `mintPublic` is of `URef` type.
           val purseAddrHex = {
             val purseAddr    = account.getPurseId.uref.toByteArray
             val purseAddrSer = serializeArray(purseAddr)
             Base16.encode(purseAddrSer)
           }
-          s"$mintPrivateHex:$purseAddrHex"
+          s"$mintPublicHex:$purseAddrHex"
         }
         balanceURef <- DeployService[F].queryState(blockHash, "local", localKeyValue, "").rethrow
         balance <- DeployService[F]
@@ -169,12 +212,13 @@ object DeployRuntime {
           .visualizeDag(depth, showJustificationLines)
           .rethrow
 
-      val useJdkRenderer = Sync[F].delay(Graphviz.useEngine(new GraphvizJdkEngine))
+      val useJdkRenderer = Sync[F].delay(Graphviz.useDefaultEngines())
 
       def writeToFile(out: String, format: Format, dag: String) =
         Sync[F].delay(
           Graphviz
             .fromString(dag)
+            .totalMemory(1000000000)
             .render(format)
             .toFile(new File(s"$out"))
         ) >> Sync[F].delay(println(s"Wrote $out"))
@@ -229,10 +273,9 @@ object DeployRuntime {
     })
 
   def transferCLI[F[_]: Sync: DeployService: FilesAPI](
-      nonce: Long,
-      contracts: Contracts,
+      deployConfig: DeployConfig,
       privateKeyFile: File,
-      recipientPublicKeyBase64: String,
+      recipientPublicKey: PublicKey,
       amount: Long
   ): F[Unit] =
     for {
@@ -250,45 +293,35 @@ object DeployRuntime {
                     )
                   )
       _ <- transfer[F](
-            nonce,
-            contracts,
+            deployConfig,
             publicKey,
             privateKey,
-            recipientPublicKeyBase64,
+            recipientPublicKey,
             amount
           )
     } yield ()
 
   def transfer[F[_]: Sync: DeployService: FilesAPI](
-      nonce: Long,
-      contracts: Contracts,
+      deployConfig: DeployConfig,
       senderPublicKey: PublicKey,
       senderPrivateKey: PrivateKey,
-      recipientPublicKeyBase64: String,
+      recipientPublicKey: PublicKey,
       amount: Long,
       exit: Boolean = true,
       ignoreOutput: Boolean = false
   ): F[Unit] =
-    for {
-      account <- MonadThrowable[F].fromOption(
-                  Base64.tryDecode(recipientPublicKeyBase64),
-                  new IllegalArgumentException(
-                    s"Failed to parse base64 encoded account: $recipientPublicKeyBase64"
-                  )
-                )
-      args = serializeArgs(Array(serializeArray(account), serializeLong(amount)))
-      _ <- deployFileProgram[F](
-            from = None,
-            nonce = nonce,
-            contracts.withSessionResource(TRANSFER_WASM_FILE),
-            maybeEitherPublicKey = senderPublicKey.asRight[String].some,
-            maybeEitherPrivateKey = senderPrivateKey.asRight[String].some,
-            gasPrice = 10L,
-            args,
-            exit,
-            ignoreOutput
-          )
-    } yield ()
+    deployFileProgram[F](
+      from = None,
+      deployConfig.withSessionResource(TRANSFER_WASM_FILE),
+      maybeEitherPublicKey = senderPublicKey.asRight[String].some,
+      maybeEitherPrivateKey = senderPrivateKey.asRight[String].some,
+      List(
+        bytesArg("account", recipientPublicKey),
+        longArg("amount", amount)
+      ),
+      exit,
+      ignoreOutput
+    )
 
   private def readKey[F[_]: Sync, A](keyFile: File, keyType: String, f: String => Option[A]): F[A] =
     readFileAsString[F](keyFile) >>= { key =>
@@ -322,18 +355,17 @@ object DeployRuntime {
   /** Constructs a [[Deploy]] from the provided arguments and writes it to a file (or STDOUT).
     */
   def makeDeploy[F[_]: Sync](
-      from: ByteString,
-      nonce: Long,
-      gasPrice: Long,
-      contracts: Contracts,
-      sessionArguments: Array[Byte]
+      from: PublicKey,
+      deployConfig: DeployConfig,
+      sessionArgs: Seq[Deploy.Arg]
   ): Deploy = {
-    // EE will use hardcoded execution limit if it [EE] is run with a `--use-payment-code` flag
-    // but node will verify payment code's wasm correctness so we have to send valid wasm anyway
-    // to not fail the session code execution even when EE will use hardcoded limit.
-    val session     = contracts.session
-    val payment     = if (contracts.payment.isEmpty) contracts.session else contracts.payment
-    val sessionArgs = ByteString.copyFrom(sessionArguments)
+    val session = deployConfig.session(sessionArgs)
+    // It is advisable to provide payment via --payment-name or --payment-hash, if it's stored.
+    val payment = deployConfig
+      .withPaymentResource(PAYMENT_WASM_FILE)
+      .payment(
+        deployConfig.paymentAmount.map(bigIntArg("amount", _)).toList
+      )
 
     consensus
       .Deploy()
@@ -341,15 +373,17 @@ object DeployRuntime {
         consensus.Deploy
           .Header()
           .withTimestamp(System.currentTimeMillis)
-          .withAccountPublicKey(from)
-          .withNonce(nonce)
-          .withGasPrice(gasPrice)
+          .withAccountPublicKey(ByteString.copyFrom(from))
+          .withGasPrice(deployConfig.gasPrice)
+          .withTtlMillis(deployConfig.timeToLive.getOrElse(0))
+          .withDependencies(deployConfig.dependencies)
+          .withChainName(deployConfig.chainName)
       )
       .withBody(
         consensus.Deploy
           .Body()
-          .withSession(consensus.Deploy.Code(contract = session).withAbiArgs(sessionArgs))
-          .withPayment(consensus.Deploy.Code(contract = payment))
+          .withSession(session)
+          .withPayment(payment)
       )
       .withHashes
   }
@@ -374,14 +408,28 @@ object DeployRuntime {
       } yield result
     }
 
+  /**
+    *
+    * @param bytesStandard Use standard Base64 for JSON or ASCII escaped for Protobuf bytes encoding instead of Base16
+    * @param json          Use JSON instead of Protobuf text format
+    */
+  def printDeploy[F[_]: Sync: DeployService](
+      deployBA: Array[Byte],
+      bytesStandard: Boolean,
+      json: Boolean
+  ): F[Unit] =
+    gracefulExit {
+      (for {
+        deploy <- MonadThrowable[F].fromTry(Try(Deploy.parseFrom(deployBA)))
+      } yield Printer.print(deploy, bytesStandard, json)).attempt
+    }
+
   def deployFileProgram[F[_]: Sync: DeployService](
-      from: Option[String],
-      nonce: Long,
-      contracts: Contracts,
+      from: Option[PublicKey],
+      deployConfig: DeployConfig,
       maybeEitherPublicKey: Option[Either[String, PublicKey]],
       maybeEitherPrivateKey: Option[Either[String, PrivateKey]],
-      gasPrice: Long,
-      sessionArgs: Array[Byte] = Array.emptyByteArray,
+      sessionArgs: Seq[Deploy.Arg] = Seq.empty,
       exit: Boolean = true,
       ignoreOutput: Boolean = false
   ): F[Unit] = {
@@ -397,14 +445,12 @@ object DeployRuntime {
 
     val deploy = for {
       accountPublicKey <- Sync[F].fromOption(
-                           from
-                             .map(account => ByteString.copyFrom(Base16.decode(account)))
-                             .orElse(maybePublicKey.map(ByteString.copyFrom)),
+                           from orElse maybePublicKey,
                            new IllegalArgumentException("--from or --public-key must be presented")
                          )
     } yield {
       val deploy =
-        makeDeploy(accountPublicKey, nonce, gasPrice, contracts, sessionArgs)
+        makeDeploy(accountPublicKey, deployConfig, sessionArgs)
       (maybePrivateKey, maybePublicKey).mapN(deploy.sign) getOrElse deploy
     }
 
@@ -447,66 +493,59 @@ object DeployRuntime {
   private def processError(t: Throwable): Throwable =
     Option(t.getCause).getOrElse(t)
 
-  private def hash[T <: scalapb.GeneratedMessage](data: T): ByteString =
-    ByteString.copyFrom(Blake2b256.hash(data.toByteArray))
-
   def readFileAsString[F[_]: Sync](file: File): F[String] = Sync[F].delay {
     new String(Files.readAllBytes(file.toPath), StandardCharsets.UTF_8)
   }
 
-  private def serializeLong(l: Long): Array[Byte] =
-    java.nio.ByteBuffer
-      .allocate(8)
-      .order(ByteOrder.LITTLE_ENDIAN)
-      .putLong(l)
-      .array()
+  def keygen[F[_]: Sync](
+      outputDirectory: File
+  ): F[Unit] = {
+    val path                     = outputDirectory.toPath
+    val validatorPrivPath: Path  = path.resolve("validator-private.pem")
+    val validatorPubPath: Path   = path.resolve("validator-public.pem")
+    val validatorIdPath: Path    = path.resolve("validator-id")
+    val validatorIdHexPath: Path = path.resolve("validator-id-hex")
+    val nodePrivPath: Path       = path.resolve("node.key.pem")
+    val nodeCertPath: Path       = path.resolve("node.certificate.pem")
+    val nodeIdPath: Path         = path.resolve("node-id")
 
-  private def serializeInt(i: Int): Array[Byte] =
-    java.nio.ByteBuffer
-      .allocate(4)
-      .order(ByteOrder.LITTLE_ENDIAN)
-      .putInt(i)
-      .array()
+    val program = for {
+      (valPriv, valPub) <- Sync[F].delay(Ed25519.newKeyPair)
+      _                 <- writeToFile(validatorPrivPath, printValidatorPriv(valPriv))
+      _                 <- writeToFile(validatorPubPath, printValidatorPub(valPub))
+      _                 <- writeToFile(validatorIdPath, Base64.encode(valPub))
+      _                 <- writeToFile(validatorIdHexPath, Base16.encode(valPub))
+      nodeKeyPair       <- Sync[F].delay(CertificateHelper.generateKeyPair(false))
+      nodeCert          <- Sync[F].delay(CertificateHelper.generate(nodeKeyPair))
+      _                 <- writeToFile(nodePrivPath, CertificatePrinter.printPrivateKey(nodeKeyPair.getPrivate))
+      _                 <- writeToFile(nodeCertPath, CertificatePrinter.print(nodeCert))
+      nodeId <- Sync[F].fromOption(
+                 CertificateHelper.publicAddress(nodeKeyPair.getPublic),
+                 new IllegalArgumentException("Certificate's public key is corrupted.")
+               )
+      _ <- writeToFile(nodeIdPath, Base16.encode(nodeId))
 
-  // Option serializes as follows:
-  // None:        [0]
-  // Some(value): [1] ++ serialized value
-  private def serializeOption[T](in: Option[T], fSer: T => Array[Byte]): Array[Byte] =
-    in.map(value => Array[Byte](1) ++ fSer(value)).getOrElse(Array[Byte](0))
+    } yield s"Keys successfully created in directory: ${path.toAbsolutePath.toString}"
 
-  // This is true for any array but I didn't want to go as far as writing type classes.
-  // Binary format of an array is constructed from:
-  // length (u64/integer in binary) ++ bytes
-  private def serializeArray(ba: Array[Byte]): Array[Byte] = {
-    val serLen = serializeInt(ba.length)
-    serLen ++ ba
+    gracefulExit(program.attempt)
   }
 
-  private def serializeArgs(args: Array[Array[Byte]]): Array[Byte] = {
-    val argsBytes    = args.flatMap(serializeArray)
-    val argsBytesLen = serializeInt(args.length)
-    argsBytesLen ++ argsBytes
-  }
+  private def writeToFile[F[_]: Sync](path: Path, text: String): F[Unit] =
+    Resource
+      .fromAutoCloseable {
+        Sync[F].delay { new BufferedWriter(new FileWriter(new File(path.toString))) }
+      }
+      .use(buff => Sync[F].delay(buff.write(text)))
 
-  implicit val ordering: Ordering[ByteString] =
-    Ordering.by[ByteString, String](bs => Base16.encode(bs.toByteArray))
+  private def printValidatorPriv(privateKey: PrivateKey): String =
+    s"""-----BEGIN PRIVATE KEY-----
+       |${Base64.encode(privateKey)}
+       |-----END PRIVATE KEY-----
+       |""".stripMargin
 
-  implicit class DeployOps(d: consensus.Deploy) {
-    def withHashes = {
-      val h = d.getHeader.withBodyHash(hash(d.getBody))
-      d.withHeader(h).withDeployHash(hash(h))
-    }
-
-    def sign(privateKey: PrivateKey, publicKey: PublicKey): Deploy = {
-      val sig = Ed25519.sign(d.deployHash.toByteArray, privateKey)
-      val approval = consensus
-        .Approval()
-        .withApproverPublicKey(ByteString.copyFrom(publicKey))
-        .withSignature(
-          consensus.Signature().withSigAlgorithm(Ed25519.name).withSig(ByteString.copyFrom(sig))
-        )
-      val approvals = d.approvals.toList :+ approval
-      d.withApprovals(approvals.distinct.sortBy(_.approverPublicKey))
-    }
-  }
+  private def printValidatorPub(publicKey: PublicKey): String =
+    s"""-----BEGIN PUBLIC KEY-----
+       |${Base64.encode(publicKey)}
+       |-----END PUBLIC KEY-----
+       |""".stripMargin
 }

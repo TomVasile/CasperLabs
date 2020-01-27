@@ -1,19 +1,23 @@
-use contract_ffi::value::U512;
+use types::{system_contract_errors::mint::Error, U512};
 
 use crate::capabilities::{Addable, Readable, Writable};
-use contract_ffi::system_contracts::mint::error::Error;
 
 pub trait Mint<A, RW>
 where
     A: Addable<U512>,
-    RW: Readable<U512> + Writable<U512>,
+    RW: Readable<U512> + Writable<U512> + Clone,
 {
     type PurseId;
     type DepOnlyId;
 
-    fn create(&self) -> Self::PurseId;
+    fn mint(&self, initial_balance: U512) -> Result<Self::PurseId, Error>;
     fn lookup(&self, p: Self::PurseId) -> Option<RW>;
     fn dep_lookup(&self, p: Self::DepOnlyId) -> Option<A>;
+
+    fn create(&self) -> Self::PurseId {
+        self.mint(U512::zero())
+            .expect("Creating a zero balance purse should always be allowed.")
+    }
 
     fn transfer(
         &self,
@@ -22,7 +26,7 @@ where
         amount: U512,
     ) -> Result<(), Error> {
         let source_bal = self.lookup(source).ok_or(Error::SourceNotFound)?;
-        let source_value = source_bal.read();
+        let source_value = source_bal.clone().read();
         if amount > source_value {
             return Err(Error::InsufficientFunds);
         }
@@ -36,54 +40,36 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::collections::BTreeMap;
-    use alloc::rc::Rc;
+    use alloc::{collections::BTreeMap, rc::Rc};
     use core::cell::{Cell, RefCell};
-    use core::ops::Add;
 
-    use contract_ffi::value::U512;
+    use types::U512;
 
-    use crate::capabilities::{Addable, Readable, Writable};
-    use crate::mint::{Error, Mint};
+    use crate::{
+        capabilities::{Addable, Readable, Writable},
+        mint::{Error, Mint},
+    };
 
     const GENESIS_PURSE_AMOUNT: u32 = 150;
     const GENESIS_PURSE: FullId = FullId(0);
 
     type Balance = Rc<Cell<U512>>;
 
-    impl<T: Copy> Readable<T> for Cell<T> {
-        fn read(&self) -> T {
+    impl Readable<U512> for Balance {
+        fn read(self) -> U512 {
             self.get()
         }
     }
 
-    impl<T> Writable<T> for Cell<T> {
-        fn write(&self, t: T) {
-            self.set(t);
+    impl Writable<U512> for Balance {
+        fn write(self, value: U512) {
+            self.set(value);
         }
     }
 
-    impl<T: Add<Output = T> + Copy> Addable<T> for Cell<T> {
-        fn add(&self, t: T) {
-            self.update(|x| x + t);
-        }
-    }
-
-    impl<T, R: Readable<T>> Readable<T> for Rc<R> {
-        fn read(&self) -> T {
-            R::read(self)
-        }
-    }
-
-    impl<T, W: Writable<T>> Writable<T> for Rc<W> {
-        fn write(&self, t: T) {
-            W::write(self, t)
-        }
-    }
-
-    impl<T, A: Addable<T>> Addable<T> for Rc<A> {
-        fn add(&self, t: T) {
-            A::add(self, t)
+    impl Addable<U512> for Balance {
+        fn add(self, value: U512) {
+            self.update(|x| x + value);
         }
     }
 
@@ -123,14 +109,13 @@ mod tests {
         type PurseId = FullId;
         type DepOnlyId = DepId;
 
-        fn create(&self) -> Self::PurseId {
+        fn mint(&self, balance: U512) -> Result<Self::PurseId, Error> {
             let id = self.1.get();
             self.1.set(id + 1);
 
-            let balance = U512::from(0);
             let balance = Rc::new(Cell::new(balance));
             self.0.borrow_mut().insert(id, balance);
-            FullId(id)
+            Ok(FullId(id))
         }
 
         fn lookup(&self, p: Self::PurseId) -> Option<Balance> {

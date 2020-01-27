@@ -1,8 +1,10 @@
 use engine_shared::newtypes::Blake2bHash;
 
 use super::*;
-use crate::error::{self, in_memory};
-use crate::trie_store::operations::{scan, TrieScan};
+use crate::{
+    error::{self, in_memory},
+    trie_store::operations::{scan, TrieScan},
+};
 
 fn check_scan<'a, R, S, E>(
     correlation_id: CorrelationId,
@@ -15,7 +17,7 @@ where
     R: TransactionSource<'a, Handle = S::Handle>,
     S: TrieStore<TestKey, TestValue>,
     S::Error: From<R::Error> + std::fmt::Debug,
-    E: From<R::Error> + From<S::Error> + From<contract_ffi::bytesrepr::Error>,
+    E: From<R::Error> + From<S::Error> + From<types::bytesrepr::Error>,
 {
     let txn: R::ReadTransaction = environment.create_read_txn()?;
     let root = store
@@ -37,7 +39,7 @@ where
         match parent {
             Trie::Leaf { .. } => panic!("parents should not contain any leaves"),
             Trie::Node { pointer_block } => {
-                let pointer_tip_hash = pointer_block[index.into()].map(|ptr| *ptr.hash());
+                let pointer_tip_hash = pointer_block[<usize>::from(index)].map(|ptr| *ptr.hash());
                 assert_eq!(Some(expected_tip_hash), pointer_tip_hash);
                 tip = Trie::Node { pointer_block };
             }
@@ -105,7 +107,7 @@ mod full_tries {
     #[test]
     fn lmdb_scans_from_n_leaf_full_trie_had_expected_results() {
         let correlation_id = CorrelationId::new();
-        let context = LmdbTestContext::new(&[]).unwrap();
+        let context = LmdbTestContext::new(EMPTY_HASHED_TEST_TRIES).unwrap();
         let mut states: Vec<Blake2bHash> = Vec::new();
 
         for (state_index, generator) in TEST_TRIE_GENERATORS.iter().enumerate() {
@@ -132,7 +134,7 @@ mod full_tries {
     #[test]
     fn in_memory_scans_from_n_leaf_full_trie_had_expected_results() {
         let correlation_id = CorrelationId::new();
-        let context = InMemoryTestContext::new(&[]).unwrap();
+        let context = InMemoryTestContext::new(EMPTY_HASHED_TEST_TRIES).unwrap();
         let mut states: Vec<Blake2bHash> = Vec::new();
 
         for (state_index, generator) in TEST_TRIE_GENERATORS.iter().enumerate() {

@@ -1,8 +1,10 @@
 package io.casperlabs.comm.gossiping
 
+import cats._
 import cats.effect._
 import cats.effect.concurrent._
 import cats.implicits._
+import cats.syntax._
 import com.google.protobuf.ByteString
 import io.casperlabs.casper.consensus._
 import io.casperlabs.comm.ServiceError
@@ -12,9 +14,10 @@ import io.casperlabs.comm.discovery.{Node, NodeDiscovery}
 import io.casperlabs.comm.gossiping.Utils._
 import io.casperlabs.shared.Log
 
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.util.Random
 import scala.util.control.NonFatal
+import cats.data.NonEmptyList
 
 /** Accumulate approvals for the Genesis block. When enough of them is
   * present to pass a threshold which is the preorgative of this node,
@@ -60,22 +63,34 @@ object GenesisApproverImpl {
 
   case class Status(candidate: GenesisCandidate, block: Block)
 
-  /** Use by non-standalone nodes while there is no DAG. */
-  def fromBootstrap[F[_]: Concurrent: Log: Timer](
+  /** Parameters we only need if we want to compare our Genesis to a set of bootstrap nodes,
+    * or to download the genesis from there in the first place. */
+  case class BootstrapParams[F[_]](
+      bootstraps: NonEmptyList[Node],
+      pollInterval: FiniteDuration,
+      downloadManager: DownloadManager[F]
+  )
+
+  def apply[F[_]: Concurrent: Log: Timer](
       backend: GenesisApproverImpl.Backend[F],
       nodeDiscovery: NodeDiscovery[F],
       connectToGossip: GossipService.Connector[F],
       relayFactor: Int,
-      bootstrap: Node,
-      pollInterval: FiniteDuration,
-      downloadManager: DownloadManager[F]
+      maybeBootstrapParams: Option[BootstrapParams[F]],
+      maybeGenesis: Option[Block],
+      maybeApproval: Option[Approval]
   ): Resource[F, GenesisApprover[F]] =
-    Resource.make {
+    Resource.make[F, (GenesisApprover[F], F[Unit])] {
       for {
-        statusRef          <- Ref.of(none[Status])
-        hasTransitionedRef <- Ref.of(false)
+        statusRef <- Ref[F].of {
+                      maybeGenesis.map { genesis =>
+                        Status(GenesisCandidate(genesis.blockHash), genesis)
+                      }
+                    }
+        hasTransitionedRef <- Ref[F].of(false)
         deferredApproval   <- Deferred[F, ByteString]
-        approver = new GenesisApproverImpl(
+
+        approver = new GenesisApproverImpl[F](
           statusRef,
           hasTransitionedRef,
           deferredApproval,
@@ -84,15 +99,51 @@ object GenesisApproverImpl {
           connectToGossip,
           relayFactor
         )
-        poll <- Concurrent[F].start {
-                 approver.pollBootstrap(bootstrap, pollInterval, downloadManager)
-               }
-      } yield (approver, poll)
+        // Pull the Genesis from bootstrap nodes if given, so we get a list of approvals
+        // that we can compare agains the known validators for transitioning.
+        cancelPoll <- maybeBootstrapParams.fold(().pure[F].pure[F]) { params =>
+                       Concurrent[F].start {
+                         approver.pollBootstraps(
+                           params.bootstraps.toList,
+                           params.pollInterval,
+                           params.downloadManager
+                         )
+                       } map { fiber =>
+                         fiber.cancel.attempt.void
+                       }
+                     }
+
+        // Gossip, trigger as usual.
+        _ <- maybeGenesis.fold(().pure[F]) { g =>
+              approver.addApprovals(g.blockHash, maybeApproval.toList).void
+            }
+      } yield (approver, cancelPoll)
     } {
-      _._2.cancel.attempt.void
+      _._2
     } map {
       _._1
     }
+
+  /** Use by non-standalone nodes that don't construct Genesis,
+    *  while there is no DAG to get it from either. */
+  def fromBootstraps[F[_]: Concurrent: Log: Timer](
+      backend: GenesisApproverImpl.Backend[F],
+      nodeDiscovery: NodeDiscovery[F],
+      connectToGossip: GossipService.Connector[F],
+      relayFactor: Int,
+      bootstraps: NonEmptyList[Node],
+      pollInterval: FiniteDuration,
+      downloadManager: DownloadManager[F]
+  ): Resource[F, GenesisApprover[F]] =
+    apply(
+      backend,
+      nodeDiscovery,
+      connectToGossip,
+      relayFactor,
+      Some(BootstrapParams(bootstraps, pollInterval, downloadManager)),
+      maybeGenesis = None,
+      maybeApproval = None
+    )
 
   /** Use in standalone mode with the pre-constructed Genesis block. */
   def fromGenesis[F[_]: Concurrent: Log: Timer](
@@ -103,25 +154,15 @@ object GenesisApproverImpl {
       genesis: Block,
       maybeApproval: Option[Approval]
   ): Resource[F, GenesisApprover[F]] =
-    Resource.liftF {
-      for {
-        // Start with empty list of approvals and add it to trigger the transition if it has to be.
-        statusRef          <- Ref.of(Status(GenesisCandidate(genesis.blockHash), genesis).some)
-        hasTransitionedRef <- Ref.of(false)
-        deferredApproval   <- Deferred[F, ByteString]
-        approver = new GenesisApproverImpl(
-          statusRef,
-          hasTransitionedRef,
-          deferredApproval,
-          backend,
-          nodeDiscovery,
-          connectToGossip,
-          relayFactor
-        )
-        // Gossip, trigger as usual.
-        _ <- approver.addApprovals(genesis.blockHash, maybeApproval.toList)
-      } yield approver
-    }
+    apply(
+      backend,
+      nodeDiscovery,
+      connectToGossip,
+      relayFactor,
+      maybeBootstrapParams = None,
+      maybeGenesis = Some(genesis),
+      maybeApproval = maybeApproval
+    )
 }
 
 /** Maintain the state of the Genesis approval and handle gossiping.
@@ -190,13 +231,13 @@ class GenesisApproverImpl[F[_]: Concurrent: Log: Timer](
     }
 
   /** Get the Genesis candidate from the bootstrap node and keep polling until we can do the transition. */
-  private def pollBootstrap(
-      bootstrap: Node,
+  private def pollBootstraps(
+      bootstraps: List[Node],
       pollInterval: FiniteDuration,
       downloadManager: DownloadManager[F]
   ): F[Unit] = {
 
-    def download(service: GossipService[F], blockHash: ByteString): F[Block] =
+    def download(bootstrap: Node, service: GossipService[F], blockHash: ByteString): F[Block] =
       for {
         maybeSummary <- service
                          .streamBlockSummaries(StreamBlockSummariesRequest(Seq(blockHash)))
@@ -217,13 +258,17 @@ class GenesisApproverImpl[F[_]: Concurrent: Log: Timer](
 
     // Establish th status by downloading the block if we don't have it yet.
     // Return our own approval if we can indeed sign it.
-    def maybeDownload(service: GossipService[F], blockHash: ByteString): F[Option[Approval]] =
+    def maybeDownload(
+        bootstrap: Node,
+        service: GossipService[F],
+        blockHash: ByteString
+    ): F[Option[Approval]] =
       statusRef.get.flatMap {
         case None =>
           for {
             maybeBlock <- backend.getBlock(blockHash)
             block <- maybeBlock.toOptionT[F].getOrElseF {
-                      download(service, blockHash)
+                      download(bootstrap, service, blockHash)
                     }
             maybeApproval <- Sync[F].rethrow(backend.validateCandidate(block))
             // Add empty candidate so we can verify all approvals one by one.
@@ -235,11 +280,13 @@ class GenesisApproverImpl[F[_]: Concurrent: Log: Timer](
           none.pure[F]
       }
 
-    def loop(prevApprovals: Set[Approval]): F[Unit] = {
+    def loop(bootstraps: List[Node], prevApprovals: Set[Approval]): F[Unit] = {
+      val bootstrap = bootstraps.head
+
       val trySync: F[(Set[Approval], Boolean)] = for {
         service       <- connectToGossip(bootstrap)
         candidate     <- service.getGenesisCandidate(GetGenesisCandidateRequest())
-        maybeApproval <- maybeDownload(service, candidate.blockHash)
+        maybeApproval <- maybeDownload(bootstrap, service, candidate.blockHash)
         newApprovals  = candidate.approvals.toSet ++ maybeApproval -- prevApprovals
         transitioned  <- addApprovals(candidate.blockHash, newApprovals.toList)
       } yield (newApprovals ++ prevApprovals, transitioned)
@@ -247,18 +294,22 @@ class GenesisApproverImpl[F[_]: Concurrent: Log: Timer](
       trySync
         .handleErrorWith {
           case NonFatal(ex) =>
-            Log[F].warn(s"Failed to sync genesis candidate with bootstrap ${bootstrap.show}: $ex") *>
+            Log[F].warn(
+              s"Failed to sync genesis candidate with bootstrap ${bootstrap.show -> "peer"}: $ex"
+            ) *>
               (prevApprovals, false).pure[F]
         }
         .flatMap {
           case (_, transitioned) if transitioned =>
             ().pure[F]
           case (checkedApprovals, _) =>
-            Timer[F].sleep(pollInterval) >> loop(checkedApprovals)
+            // Cycle through bootstrap nodes.
+            val nextBootstraps = bootstraps.tail :+ bootstrap
+            Timer[F].sleep(pollInterval) >> loop(nextBootstraps, checkedApprovals)
         }
     }
 
-    loop(Set.empty)
+    loop(bootstraps, Set.empty)
   }
 
   /** Add the approval to the state if it's new and matches what we accept. Return the new state if it changed. */
@@ -321,12 +372,12 @@ class GenesisApproverImpl[F[_]: Concurrent: Log: Timer](
       val tryRelay = for {
         service <- connectToGossip(peer)
         _       <- service.addApproval(AddApprovalRequest(blockHash).withApproval(approval))
-        _       <- Log[F].debug(s"Relayed an approval for $id to ${peer.show}")
+        _       <- Log[F].debug(s"Relayed an approval for $id to ${peer.show -> "peer"}")
       } yield true
 
       tryRelay.handleErrorWith {
         case NonFatal(ex) =>
-          Log[F].warn(s"Could not relay the approval for $id to ${peer.show}: $ex") *> false
+          Log[F].warn(s"Could not relay the approval for $id to ${peer.show -> "peer"}: $ex") *> false
             .pure[F]
       }
     }

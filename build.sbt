@@ -4,8 +4,13 @@ import com.typesafe.sbt.packager.docker._
 //allow stopping sbt tasks using ctrl+c without killing sbt itself
 Global / cancelable := true
 
-//disallow any unresolved version conflicts at all for faster feedback
-Global / conflictManager := ConflictManager.strict
+//to show library sources if using Bloop in IDEA
+bloopExportJarClassifiers.in(Global) := Some(Set("sources"))
+
+// disallow any unresolved version conflicts at all for faster feedback
+// TODO: After upgrading sbt to 1.3.2 it started throwing errors during compilation
+// Global / conflictManager := ConflictManager.strict
+
 //resolve all version conflicts explicitly
 Global / dependencyOverrides := Dependencies.overrides
 
@@ -13,24 +18,24 @@ Global / dependencyOverrides := Dependencies.overrides
 val protobufDirectory = file("protobuf")
 // Protos can import any other using the full path within `protobuf`. This filter reduces the list
 // for which we actually generate .scala source, so we don't get duplicates between projects.
-def protobufSubDirectoryFilter(subdirs: String*) = {
-  import java.nio.file.Paths // Handle backslash on Windows.
-  (f: File) =>
-    f.getName.endsWith(".proto") && // Not directories or other artifacts.
-      subdirs.map(Paths.get(_)).exists(p => f.toPath.getParent.endsWith(p))
+def protobufPathFilter(paths: String*) = { (f: File) =>
+  f.getName.endsWith(".proto") && // Not directories or other artifacts.
+  paths.map(protobufDirectory.toPath.resolve).exists { path =>
+    f.toPath == path || f.toPath.startsWith(path)
+  }
 }
 
 lazy val projectSettings = Seq(
   organization := "io.casperlabs",
-  scalaVersion := "2.12.9",
+  scalaVersion := "2.12.10",
   version := "0.1.0-SNAPSHOT",
   resolvers ++= Seq(
     Resolver.sonatypeRepo("releases"),
     Resolver.sonatypeRepo("snapshots"),
+    Resolver.bintrayRepo("beyondthelines", "maven"),
     "jitpack" at "https://jitpack.io"
   ),
   scalafmtOnCompile := true,
-  scapegoatVersion in ThisBuild := "1.3.4",
   testOptions in Test += Tests.Argument("-oD"), //output test durations
   dependencyOverrides ++= Seq(
     "io.kamon" %% "kamon-core" % kamonVersion
@@ -39,23 +44,11 @@ lazy val projectSettings = Seq(
     case None    => Seq()
     case Some(v) => Seq("-source", v, "-target", v)
   }),
-  Test / fork := false, // Forking may cause "Reporter closed abruptly..." messages due to non-serializable exceptions.
+  Test / fork := true, // Forking may cause "Reporter closed abruptly..." messages due to non-serializable exceptions.
   Test / parallelExecution := false,
   Test / testForkedParallel := false,
-  IntegrationTest / fork := true,
-  IntegrationTest / parallelExecution := false,
-  IntegrationTest / testForkedParallel := false,
   Compile / doc / sources := Seq.empty,
   Compile / packageDoc / publishArtifact := false
-)
-
-lazy val coverageSettings = Seq(
-  coverageMinimum := 90,
-  coverageFailOnMinimum := false,
-  coverageExcludedFiles := Seq(
-    (javaSource in Compile).value,
-    (sourceManaged in Compile).value.getPath ++ "/.*"
-  ).mkString(";")
 )
 
 // Before starting sbt export YOURKIT_AGENT set to the profiling agent appropriate
@@ -64,11 +57,10 @@ lazy val profilerSettings = Seq(
   javaOptions in run ++= sys.env
     .get("YOURKIT_AGENT")
     .map(agent => s"-agentpath:$agent=onexit=snapshot,sampling")
-    .toSeq,
-  javaOptions in reStart ++= (javaOptions in run).value
+    .toSeq
 )
 
-lazy val commonSettings = projectSettings ++ coverageSettings ++ CompilerSettings.options ++ profilerSettings
+lazy val commonSettings = projectSettings ++ CompilerSettings.options ++ profilerSettings
 
 lazy val jmhSettings = Seq(
   sourceDirectory in Jmh := (sourceDirectory in Test).value,
@@ -84,13 +76,15 @@ lazy val shared = (project in file("shared"))
   .settings(
     version := "0.1",
     libraryDependencies ++= commonDependencies ++ Seq(
-      fs2,
+      sqlLite,
+      fs2Io,
       catsCore,
-      catsPar,
       catsEffect,
       catsEffectLaws,
       catsMtl,
-      meowMtl,
+      meowMtlCore,
+      meowMtlEffects,
+      meowMtlMonix,
       lz4,
       monix,
       scodecCore,
@@ -124,15 +118,13 @@ lazy val casper = (project in file("casper"))
       nettyAll,
       nettyTransNativeEpoll,
       nettyTransNativeKqueue
-    )
+    ),
+    Test / unmanagedClasspath ++= storage.base / "src" / "main" / "resources" :: Nil
   )
   .dependsOn(
     storage        % "compile->compile;test->test",
     comm           % "compile->compile;test->test",
-    shared         % "compile->compile;test->test",
-    smartContracts % "compile->compile;test->test",
-    crypto,
-    models
+    smartContracts % "compile->compile;test->test"
   )
 
 lazy val comm = (project in file("comm"))
@@ -141,6 +133,7 @@ lazy val comm = (project in file("comm"))
     version := "0.1",
     dependencyOverrides += "org.slf4j" % "slf4j-api" % "1.7.25",
     libraryDependencies ++= commonDependencies ++ kamonDependencies ++ protobufDependencies ++ Seq(
+      upperbound,
       grpcNetty,
       nettyBoringSsl,
       scalapbRuntimegGrpc,
@@ -155,10 +148,9 @@ lazy val comm = (project in file("comm"))
     ),
     PB.protoSources in Compile := Seq(protobufDirectory),
     includeFilter in PB.generate := new SimpleFileFilter(
-      protobufSubDirectoryFilter(
+      protobufPathFilter(
         "io/casperlabs/comm/discovery",
-        "io/casperlabs/comm/gossiping",
-        "io/casperlabs/comm/protocol/routing" // TODO: Eventually remove.
+        "io/casperlabs/comm/gossiping"
       )
     ),
     PB.targets in Compile := Seq(
@@ -167,7 +159,7 @@ lazy val comm = (project in file("comm"))
         .GrpcMonixGenerator(flatPackage = true) -> (sourceManaged in Compile).value
     )
   )
-  .dependsOn(shared % "compile->compile;test->test", crypto, models)
+  .dependsOn(models % "compile->compile;test->test")
 
 lazy val crypto = (project in file("crypto"))
   .settings(commonSettings: _*)
@@ -185,7 +177,7 @@ lazy val crypto = (project in file("crypto"))
     ),
     fork := true
   )
-  .dependsOn(shared)
+  .dependsOn(shared % "compile->compile;test->test")
 
 lazy val models = (project in file("models"))
   .settings(commonSettings: _*)
@@ -204,11 +196,10 @@ lazy val models = (project in file("models"))
       protobufDirectory
     ),
     includeFilter in PB.generate := new SimpleFileFilter(
-      protobufSubDirectoryFilter(
+      protobufPathFilter(
         "google/api",
         "io/casperlabs/casper/consensus",
-        "io/casperlabs/casper/protocol", // TODO: Eventually remove.
-        "io/casperlabs/ipc"
+        "io/casperlabs/ipc/transforms.proto"
       )
     ),
     PB.targets in Compile := Seq(
@@ -217,9 +208,9 @@ lazy val models = (project in file("models"))
         .GrpcMonixGenerator(flatPackage = true) -> (sourceManaged in Compile).value
     )
   )
-  .dependsOn(crypto, shared % "compile->compile;test->test")
+  .dependsOn(crypto % "compile->compile;test->test")
 
-val nodeAndClientVersion = "0.6.0"
+val nodeAndClientVersion = "0.11.0"
 
 lazy val node = (project in file("node"))
   .settings(commonSettings: _*)
@@ -234,22 +225,26 @@ lazy val node = (project in file("node"))
     packageSummary := "CasperLabs Node",
     packageDescription := "CasperLabs Node - the Casperlabs blockchain node server software.",
     libraryDependencies ++=
-      apiServerDependencies ++ commonDependencies ++ kamonDependencies ++ protobufDependencies ++ Seq(
+      apiServerDependencies ++ commonDependencies ++ slf4jAdapters ++ kamonDependencies ++ protobufDependencies ++ Seq(
         catsCore,
         grpcNetty,
+        fs2ReactiveStreams,
         jline,
         scallop,
         scalaUri,
         scalapbRuntimegGrpc,
+        pbdirect,
         tomlScala,
         sangria,
-        javaWebsocket
+        javaWebsocket,
+        apacheCommons
       ),
     PB.protoSources in Compile := Seq(protobufDirectory),
     includeFilter in PB.generate := new SimpleFileFilter(
-      protobufSubDirectoryFilter(
+      protobufPathFilter(
         "google/api",
-        "io/casperlabs/node/api"
+        "io/casperlabs/node/api",
+        "io/casperlabs/comm/discovery"
       )
     ),
     // Generating into /protobuf because of a clash with sbt-buildinfo: https://github.com/thesamet/sbt-protoc/issues/8
@@ -260,13 +255,6 @@ lazy val node = (project in file("node"))
     ),
     buildInfoKeys := Seq[BuildInfoKey](name, version, scalaVersion, sbtVersion, git.gitHeadCommit),
     buildInfoPackage := "io.casperlabs.node",
-    mainClass in assembly := Some("io.casperlabs.node.Main"),
-    assemblyMergeStrategy in assembly := {
-      case x if x.endsWith("io.netty.versions.properties") => MergeStrategy.first
-      case x =>
-        val oldStrategy = (assemblyMergeStrategy in assembly).value
-        oldStrategy(x)
-    },
     /*
      * This monstrosity exists because
      * a) we want to get rid of annoying JVM >= 9 warnings,
@@ -322,9 +310,11 @@ lazy val node = (project in file("node"))
     },
     /* Packaging */
     linuxPackageMappings ++= {
-      val file = baseDirectory.value / "casperlabs-node.service"
+      val service_file = baseDirectory.value / "casperlabs-node.service"
+      val example_toml = baseDirectory.value / "src/main/resources/default-configuration.toml"
       Seq(
-        packageMapping(file -> "/lib/systemd/system/casperlabs-node.service")
+        packageMapping(service_file -> "/lib/systemd/system/casperlabs-node.service"),
+        packageMapping(example_toml -> "/etc/casperlabs/example-configuration.toml")
       )
     },
     /* Debian */
@@ -354,7 +344,7 @@ lazy val node = (project in file("node"))
     rpmAutoreq := "no",
     Test / fork := true // Config tests errors would quit SBT itself due to Scallops.
   )
-  .dependsOn(casper, comm, crypto)
+  .dependsOn(casper)
 
 lazy val storage = (project in file("storage"))
   .enablePlugins(JmhPlugin)
@@ -364,8 +354,6 @@ lazy val storage = (project in file("storage"))
     name := "storage",
     version := "0.0.1-SNAPSHOT",
     libraryDependencies ++= commonDependencies ++ protobufLibDependencies ++ Seq(
-      lmdbjava,
-      sqlLite,
       doobieCore,
       doobieHikari,
       flyway,
@@ -375,8 +363,9 @@ lazy val storage = (project in file("storage"))
     ),
     PB.protoSources in Compile := Seq(protobufDirectory),
     includeFilter in PB.generate := new SimpleFileFilter(
-      protobufSubDirectoryFilter(
-        "io/casperlabs/storage"
+      protobufPathFilter(
+        "io/casperlabs/storage",
+        "io/casperlabs/ipc"
       )
     ),
     PB.targets in Compile := Seq(
@@ -385,7 +374,7 @@ lazy val storage = (project in file("storage"))
         .GrpcMonixGenerator(flatPackage = true) -> (sourceManaged in Compile).value
     )
   )
-  .dependsOn(shared, models % "compile->compile;test->test")
+  .dependsOn(models % "compile->compile;test->test")
 
 // Smart contract execution.
 lazy val smartContracts = (project in file("smart-contracts"))
@@ -401,8 +390,8 @@ lazy val smartContracts = (project in file("smart-contracts"))
     ),
     PB.protoSources in Compile := Seq(protobufDirectory),
     includeFilter in PB.generate := new SimpleFileFilter(
-      protobufSubDirectoryFilter(
-        "io/casperlabs/ipc"
+      protobufPathFilter(
+        "io/casperlabs/ipc/ipc.proto"
       )
     ),
     PB.targets in Compile := Seq(
@@ -426,11 +415,12 @@ lazy val client = (project in file("client"))
     javacOptions ++= Seq("-Dnashorn.args=\"--no-deprecation-warning\""),
     packageSummary := "CasperLabs Client",
     packageDescription := "CLI tool for interaction with the CasperLabs Node",
-    libraryDependencies ++= commonDependencies ++ Seq(
+    libraryDependencies ++= commonDependencies ++ slf4jAdapters ++ Seq(
       scallop,
       grpcNetty,
       graphvizJava,
-      apacheCommons
+      apacheCommons,
+      scalapbCirce
     ),
     buildInfoKeys := Seq[BuildInfoKey](name, version, scalaVersion, sbtVersion, git.gitHeadCommit),
     buildInfoPackage := "io.casperlabs.client",
@@ -509,9 +499,10 @@ lazy val client = (project in file("client"))
     // Generate client stubs for the node API.
     PB.protoSources in Compile := Seq(protobufDirectory),
     includeFilter in PB.generate := new SimpleFileFilter(
-      protobufSubDirectoryFilter(
+      protobufPathFilter(
         "google/api",
-        "io/casperlabs/node/api"
+        "io/casperlabs/node/api",
+        "io/casperlabs/comm/discovery"
       )
     ),
     // Generating into /protobuf because of a clash with sbt-buildinfo: https://github.com/thesamet/sbt-protoc/issues/8
@@ -521,7 +512,7 @@ lazy val client = (project in file("client"))
         .GrpcMonixGenerator(flatPackage = true) -> (sourceManaged in Compile).value / "protobuf"
     )
   )
-  .dependsOn(crypto, shared, models, graphz)
+  .dependsOn(models, graphz)
 
 lazy val benchmarks = (project in file("benchmarks"))
   .enablePlugins(RpmPlugin, DebianPlugin, JavaAppPackaging, BuildInfoPlugin)
@@ -574,7 +565,7 @@ lazy val gatling = (project in file("gatling"))
     dependencyOverrides ++= gatlingOverrides,
     PB.protoSources in Compile := Seq(protobufDirectory),
     includeFilter in PB.generate := new SimpleFileFilter(
-      protobufSubDirectoryFilter(
+      protobufPathFilter(
         "io/casperlabs/comm/discovery"
       )
     ),
@@ -586,7 +577,7 @@ lazy val gatling = (project in file("gatling"))
       PB.gens.java                              -> (sourceManaged in Compile).value / "protobuf"
     )
   )
-  .dependsOn(shared)
+  .dependsOn(comm)
 
 lazy val casperlabs = (project in file("."))
   .settings(commonSettings: _*)
@@ -601,5 +592,6 @@ lazy val casperlabs = (project in file("."))
     shared,
     smartContracts,
     client,
-    benchmarks
+    benchmarks,
+    gatling
   )

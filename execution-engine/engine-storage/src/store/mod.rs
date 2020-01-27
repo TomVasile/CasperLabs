@@ -2,7 +2,7 @@ mod store_ext;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use contract_ffi::bytesrepr::{self, FromBytes, ToBytes};
+use types::bytesrepr::{self, FromBytes, ToBytes};
 
 pub use self::store_ext::StoreExt;
 use crate::transaction_source::{Readable, Writable};
@@ -25,7 +25,7 @@ pub trait Store<K, V> {
         match txn.read(handle, &key.to_bytes()?)? {
             None => Ok(None),
             Some(value_bytes) => {
-                let value = bytesrepr::deserialize(&value_bytes)?;
+                let value = bytesrepr::deserialize(value_bytes)?;
                 Ok(Some(value))
             }
         }

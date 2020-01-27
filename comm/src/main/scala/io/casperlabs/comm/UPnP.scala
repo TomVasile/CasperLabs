@@ -95,15 +95,14 @@ object UPnP {
   ): F[Option[String]] =
     for {
       _ <- Log[F].info(
-            s"Available gateway devices: ${devices.gateways.map(d => d.getFriendlyName).mkString(", ")}"
+            s"Available gateway devices: ${devices.gateways.map(d => d.getFriendlyName).mkString(", ") -> "gateways"}"
           )
       gateway = devices.validGateway.getOrElse(devices.gateways.head)
       _       <- Log[F].info(s"Picking ${gateway.getFriendlyName} as gateway")
       _ <- isPrivateIpAddress(gateway.getExternalIPAddress) match {
             case Some(true) =>
               Log[F].warn(
-                s"Gateway's external IP address ${gateway.getExternalIPAddress} is from a private address block. " +
-                  "This machine is behind more than one NAT."
+                s"Gateway's external IP address ${gateway.getExternalIPAddress} is from a private address block. This machine is behind more than one NAT."
               )
             case Some(_) =>
               Log[F].info("Gateway's external IP address is from a public address block.")
@@ -124,8 +123,10 @@ object UPnP {
           else
             Log[F].info("UPnP port forwarding was most likely successful!")
 
-      _ <- Log[F].info(showPortMappingHeader)
-      _ <- getPortMappings(gateway).toList.map(showPortMapping).traverse(Log[F].info)
+      _ <- Log[F].info(s"${showPortMappingHeader -> "header" -> null}")
+      _ <- getPortMappings(gateway).toList
+            .map(showPortMapping)
+            .traverse(x => Log[F].info(s"${x -> "mapping" -> null}"))
     } yield Some(gateway.getExternalIPAddress)
 
   def assurePortForwarding[F[_]: Log: Sync](ports: List[Int]): F[Option[String]] =
@@ -201,25 +202,25 @@ object UPnP {
       port: Int,
       protocol: String,
       description: String
-  ): Either[CommError, Boolean] =
+  ): Either[Throwable, Boolean] =
     try {
       Right(
         device
           .addPortMapping(port, port, device.getLocalAddress.getHostAddress, protocol, description)
       )
     } catch {
-      case NonFatal(ex: Exception) => Left(UnknownCommError(ex.toString))
+      case NonFatal(ex: Exception) => Left(ex)
     }
 
   private def removePort(
       device: GatewayDevice,
       portMapping: PortMappingEntry
-  ): Either[CommError, Unit] =
+  ): Either[Throwable, Unit] =
     try {
       device.deletePortMapping(portMapping.getExternalPort, portMapping.getProtocol)
       Right(())
     } catch {
-      case NonFatal(ex: Exception) => Left(UnknownCommError(ex.toString))
+      case NonFatal(ex: Exception) => Left(ex)
     }
 }
 

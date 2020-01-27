@@ -1,62 +1,199 @@
-use std::collections::HashMap;
+use engine_core::engine_state::{
+    genesis::{GenesisAccount, GenesisConfig},
+    SYSTEM_ACCOUNT_ADDR,
+};
+use engine_shared::{motes::Motes, stored_value::StoredValue};
+use engine_test_support::low_level::{utils, InMemoryWasmTestBuilder, DEFAULT_WASM_COSTS};
+use types::{account::PublicKey, Key, ProtocolVersion, U512};
 
-use grpc::RequestOptions;
+const MINT_INSTALL: &str = "mint_install.wasm";
+const POS_INSTALL: &str = "pos_install.wasm";
+const BAD_INSTALL: &str = "standard_payment.wasm";
 
-use crate::support::test_support::WasmTestBuilder;
-use engine_core::engine_state::EngineState;
-use engine_grpc_server::engine_server::ipc_grpc::ExecutionEngineService;
-use engine_storage::global_state::in_memory::InMemoryGlobalState;
-
-const GENESIS_ADDR: [u8; 32] = [6u8; 32];
+const CHAIN_NAME: &str = "Jeremiah";
+const TIMESTAMP: u64 = 0;
+const ACCOUNT_1_ADDR: [u8; 32] = [1u8; 32];
+const ACCOUNT_2_ADDR: [u8; 32] = [2u8; 32];
+const ACCOUNT_1_BONDED_AMOUNT: u64 = 1_000_000;
+const ACCOUNT_2_BONDED_AMOUNT: u64 = 2_000_000;
+const ACCOUNT_1_BALANCE: u64 = 1_000_000_000;
+const ACCOUNT_2_BALANCE: u64 = 2_000_000_000;
 
 #[ignore]
 #[test]
 fn should_run_genesis() {
-    let global_state = InMemoryGlobalState::empty().expect("should create global state");
-    let engine_state = EngineState::new(global_state, Default::default());
+    let account_1_balance = Motes::new(ACCOUNT_1_BALANCE.into());
+    let account_1 = {
+        let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
+        let account_1_bonded_amount = Motes::new(ACCOUNT_1_BONDED_AMOUNT.into());
+        GenesisAccount::new(
+            account_1_public_key,
+            account_1_balance,
+            account_1_bonded_amount,
+        )
+    };
 
-    let (genesis_request, _) =
-        crate::support::test_support::create_genesis_request(GENESIS_ADDR, HashMap::new());
+    let account_2_balance = Motes::new(ACCOUNT_2_BALANCE.into());
+    let account_2 = {
+        let account_2_public_key = PublicKey::new(ACCOUNT_2_ADDR);
+        let account_2_bonded_amount = Motes::new(ACCOUNT_2_BONDED_AMOUNT.into());
+        GenesisAccount::new(
+            account_2_public_key,
+            account_2_balance,
+            account_2_bonded_amount,
+        )
+    };
 
-    let request_options = RequestOptions::new();
+    let name = CHAIN_NAME.to_string();
+    let mint_installer_bytes = utils::read_wasm_file_bytes(MINT_INSTALL);
+    let pos_installer_bytes = utils::read_wasm_file_bytes(POS_INSTALL);
+    let accounts = vec![account_1, account_2];
+    let protocol_version = ProtocolVersion::V1_0_0;
+    let wasm_costs = *DEFAULT_WASM_COSTS;
 
-    let genesis_response = engine_state
-        .run_genesis(request_options, genesis_request)
-        .wait_drop_metadata();
+    let genesis_config = GenesisConfig::new(
+        name,
+        TIMESTAMP,
+        protocol_version,
+        mint_installer_bytes,
+        pos_installer_bytes,
+        accounts,
+        wasm_costs,
+    );
 
-    let response = genesis_response.unwrap();
+    let mut builder = InMemoryWasmTestBuilder::default();
 
-    let state_handle = engine_state.state();
+    builder.run_genesis(&genesis_config);
 
-    let state_handle_guard = state_handle.lock();
+    let system_account = builder
+        .get_account(SYSTEM_ACCOUNT_ADDR)
+        .expect("system account should exist");
 
-    let state_root_hash = state_handle_guard.root_hash;
-    let response_root_hash = response.get_success().get_poststate_hash();
+    let account_1 = builder
+        .get_account(ACCOUNT_1_ADDR)
+        .expect("account 1 should exist");
 
-    assert_eq!(state_root_hash.to_vec(), response_root_hash.to_vec());
+    let account_2 = builder
+        .get_account(ACCOUNT_2_ADDR)
+        .expect("account 2 should exist");
+
+    let system_account_balance_actual = builder.get_purse_balance(system_account.purse_id());
+    let account_1_balance_actual = builder.get_purse_balance(account_1.purse_id());
+    let account_2_balance_actual = builder.get_purse_balance(account_2.purse_id());
+
+    assert_eq!(system_account_balance_actual, U512::zero());
+    assert_eq!(account_1_balance_actual, account_1_balance.value());
+    assert_eq!(account_2_balance_actual, account_2_balance.value());
+
+    let mint_contract_uref = builder.get_mint_contract_uref();
+    let pos_contract_uref = builder.get_pos_contract_uref();
+
+    if let Some(StoredValue::Contract(_)) = builder.query(None, Key::URef(mint_contract_uref), &[])
+    {
+        // Contract exists at mint contract URef
+    } else {
+        panic!("contract not found at mint uref");
+    }
+
+    if let Some(StoredValue::Contract(_)) = builder.query(None, Key::URef(pos_contract_uref), &[]) {
+        // Contract exists at pos contract URef
+    } else {
+        panic!("contract not found at pos uref");
+    }
 }
 
 #[ignore]
+#[should_panic]
 #[test]
-fn test_genesis_hash_match() {
-    let mut builder_base = WasmTestBuilder::default();
+fn should_fail_if_bad_mint_install_contract_is_provided() {
+    let genesis_config = {
+        let account_1 = {
+            let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
+            let account_1_balance = Motes::new(ACCOUNT_1_BALANCE.into());
+            let account_1_bonded_amount = Motes::new(ACCOUNT_1_BONDED_AMOUNT.into());
+            GenesisAccount::new(
+                account_1_public_key,
+                account_1_balance,
+                account_1_bonded_amount,
+            )
+        };
+        let account_2 = {
+            let account_2_public_key = PublicKey::new(ACCOUNT_2_ADDR);
+            let account_2_balance = Motes::new(ACCOUNT_2_BALANCE.into());
+            let account_2_bonded_amount = Motes::new(ACCOUNT_2_BONDED_AMOUNT.into());
+            GenesisAccount::new(
+                account_2_public_key,
+                account_2_balance,
+                account_2_bonded_amount,
+            )
+        };
+        let name = CHAIN_NAME.to_string();
+        let mint_installer_bytes = utils::read_wasm_file_bytes(BAD_INSTALL);
+        let pos_installer_bytes = utils::read_wasm_file_bytes(POS_INSTALL);
+        let accounts = vec![account_1, account_2];
+        let protocol_version = ProtocolVersion::V1_0_0;
+        let wasm_costs = *DEFAULT_WASM_COSTS;
 
-    let builder = builder_base.run_genesis(GENESIS_ADDR, HashMap::new());
-
-    // This is trie's post state hash after calling run_genesis endpoint.
-    let genesis_run_hash = builder.get_genesis_hash();
-    let genesis_transforms = builder.get_genesis_transforms().clone();
-
-    let empty_root_hash = {
-        let gs = InMemoryGlobalState::empty().expect("Empty GlobalState.");
-        gs.root_hash
+        GenesisConfig::new(
+            name,
+            TIMESTAMP,
+            protocol_version,
+            mint_installer_bytes,
+            pos_installer_bytes,
+            accounts,
+            wasm_costs,
+        )
     };
 
-    // This is trie's post state hash after committing genesis effects on top of empty trie.
-    let genesis_transforms_hash = builder
-        .commit_effects(empty_root_hash.to_vec(), genesis_transforms)
-        .get_poststate_hash();
+    let mut builder = InMemoryWasmTestBuilder::default();
 
-    // They should match.
-    assert_eq!(genesis_run_hash, genesis_transforms_hash);
+    builder.run_genesis(&genesis_config);
+}
+
+#[ignore]
+#[should_panic]
+#[test]
+fn should_fail_if_bad_pos_install_contract_is_provided() {
+    let genesis_config = {
+        let account_1 = {
+            let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
+            let account_1_balance = Motes::new(ACCOUNT_1_BALANCE.into());
+            let account_1_bonded_amount = Motes::new(ACCOUNT_1_BONDED_AMOUNT.into());
+            GenesisAccount::new(
+                account_1_public_key,
+                account_1_balance,
+                account_1_bonded_amount,
+            )
+        };
+        let account_2 = {
+            let account_2_public_key = PublicKey::new(ACCOUNT_2_ADDR);
+            let account_2_balance = Motes::new(ACCOUNT_2_BALANCE.into());
+            let account_2_bonded_amount = Motes::new(ACCOUNT_2_BONDED_AMOUNT.into());
+            GenesisAccount::new(
+                account_2_public_key,
+                account_2_balance,
+                account_2_bonded_amount,
+            )
+        };
+        let name = CHAIN_NAME.to_string();
+        let mint_installer_bytes = utils::read_wasm_file_bytes(MINT_INSTALL);
+        let pos_installer_bytes = utils::read_wasm_file_bytes(BAD_INSTALL);
+        let accounts = vec![account_1, account_2];
+        let protocol_version = ProtocolVersion::V1_0_0;
+        let wasm_costs = *DEFAULT_WASM_COSTS;
+
+        GenesisConfig::new(
+            name,
+            TIMESTAMP,
+            protocol_version,
+            mint_installer_bytes,
+            pos_installer_bytes,
+            accounts,
+            wasm_costs,
+        )
+    };
+
+    let mut builder = InMemoryWasmTestBuilder::default();
+
+    builder.run_genesis(&genesis_config);
 }

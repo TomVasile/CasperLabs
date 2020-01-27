@@ -1,19 +1,17 @@
 package io.casperlabs.comm.gossiping
 
-import cats.Applicative
-import cats.effect.Sync
+import cats.{Applicative, Parallel}
+import cats.effect._
 import cats.mtl.DefaultApplicativeAsk
 import cats.syntax.option._
-import cats.temp.par.Par
 import com.google.protobuf.ByteString
 import io.casperlabs.casper.consensus.{Block, BlockSummary}
 import io.casperlabs.comm.NodeAsk
 import io.casperlabs.comm.discovery.NodeUtils._
 import io.casperlabs.comm.discovery.{Node, NodeDiscovery, NodeIdentifier}
-import io.casperlabs.p2p.EffectsTestInstances.LogStub
-import io.casperlabs.shared.Log
-import io.casperlabs.shared.Log.NOPLog
 import io.casperlabs.metrics.Metrics
+import io.casperlabs.shared.LogStub
+import io.casperlabs.shared.Log
 import monix.eval.Task
 import monix.eval.instances.CatsParallelForTask
 import monix.execution.Scheduler.Implicits.global
@@ -31,9 +29,10 @@ class RelayingSpec
     extends WordSpecLike
     with Matchers
     with BeforeAndAfterEach
-    with ArbitraryConsensus
+    with ArbitraryConsensusAndComm
     with GeneratorDrivenPropertyChecks {
   import RelayingSpec._
+  private implicit val chainId: ByteString = sample(genHash)
   private val genListNode: Gen[List[Node]] =
     for {
       n     <- Gen.choose(2, 10)
@@ -54,7 +53,8 @@ class RelayingSpec
           TestFixture(peers.size / 2, 0, peers, acceptOrFailure = _ => false.some) {
             (relaying, asked, _) =>
               for {
-                _ <- relaying.relay(List(hash))
+                awaitRelay <- relaying.relay(List(hash))
+                _          <- awaitRelay
               } yield asked.get() shouldBe (peers.size / 2)
           }
         }
@@ -63,7 +63,8 @@ class RelayingSpec
         forAll(genListNode, genHash) { (peers: List[Node], hash: ByteString) =>
           TestFixture(1, 50, peers, acceptOrFailure = _ => false.some) { (relaying, asked, _) =>
             for {
-              _ <- relaying.relay(List(hash))
+              awaitRelay <- relaying.relay(List(hash))
+              _          <- awaitRelay
             } yield asked.get() shouldBe 2
           }
         }
@@ -74,7 +75,8 @@ class RelayingSpec
           TestFixture(relayFactor, 100, peers, acceptOrFailure = _ => true.some) {
             (relaying, asked, _) =>
               for {
-                _ <- relaying.relay(List(hash))
+                awaitRelay <- relaying.relay(List(hash))
+                _          <- awaitRelay
               } yield asked.get() shouldBe relayFactor
           }
         }
@@ -90,18 +92,20 @@ class RelayingSpec
             acceptOrFailure = _ => synchronized(responseIter.next.some)
           ) { (relaying, asked, _) =>
             for {
-              _ <- relaying.relay(List(hash))
+              awaitRelay <- relaying.relay(List(hash))
+              _          <- awaitRelay
             } yield responses.take(asked.get()).count(identity) should be <= relayFactor
           }
         }
       "not stop gossiping if received an error" in
         forAll(genListNode, genHash) { (peers: List[Node], hash: ByteString) =>
-          val log = new LogStub[Task]()
+          val log = LogStub[Task]()
 
           TestFixture(peers.size, 100, peers, acceptOrFailure = _ => none[Boolean], log) {
             (relaying, asked, _) =>
               for {
-                _ <- relaying.relay(List(hash))
+                awaitRelay <- relaying.relay(List(hash))
+                _          <- awaitRelay
               } yield {
                 asked.get() shouldBe peers.size
                 log.debugs.size shouldBe peers.size
@@ -115,7 +119,8 @@ class RelayingSpec
             TestFixture(peers.size, 100, peers, acceptOrFailure = _ => false.some) {
               (relaying, _, maxConcurrentRequests) =>
                 for {
-                  _ <- relaying.relay(List(hash1, hash2, hash3))
+                  awaitRelay <- relaying.relay(List(hash1, hash2, hash3))
+                  _          <- awaitRelay
                 } yield maxConcurrentRequests.get() should be > 1
             }
         }
@@ -124,14 +129,14 @@ class RelayingSpec
 }
 
 object RelayingSpec {
-  private val local = Node(NodeIdentifier("0000"), "localhost", 40400, 40404)
+  private val local = Node(NodeIdentifier("0000"), "localhost", 40400, 40404, ByteString.EMPTY)
 
   private val ask: NodeAsk[Task] = new DefaultApplicativeAsk[Task, Node] {
     val applicative: Applicative[Task] = Applicative[Task]
     def ask: Task[Node]                = Task.pure(local)
   }
 
-  private val noOpLog: Log[Task] = new NOPLog[Task]
+  private val noOpLog: Log[Task] = Log.NOPLog[Task]
   implicit val metrics           = new Metrics.MetricsNOP[Task]
 
   object TestFixture {
@@ -146,6 +151,7 @@ object RelayingSpec {
         override def discover: Task[Unit]                                  = ???
         override def lookup(id: NodeIdentifier): Task[Option[Node]]        = ???
         override def recentlyAlivePeersAscendingDistance: Task[List[Node]] = Task.now(peers)
+        override def banTemp(node: Node): Task[Unit]                       = ???
       }
       val asked                 = AtomicInt(0)
       val concurrency           = AtomicInt(0)
@@ -172,17 +178,21 @@ object RelayingSpec {
           override def streamAncestorBlockSummaries(
               request: StreamAncestorBlockSummariesRequest
           ) = ???
-          override def streamDagTipBlockSummaries(request: StreamDagTipBlockSummariesRequest) =
-            ???
+          override def streamLatestMessages(
+              request: StreamLatestMessagesRequest
+          ): Iterant[Task, Block.Justification]                                   = ???
           override def streamBlockSummaries(request: StreamBlockSummariesRequest) = ???
           override def getBlockChunked(request: GetBlockChunkedRequest)           = ???
           override def addApproval(request: AddApprovalRequest)                   = ???
           override def getGenesisCandidate(request: GetGenesisCandidateRequest)   = ???
+          override def streamDagSliceBlockSummaries(
+              request: StreamDagSliceBlockSummariesRequest
+          ): Iterant[Task, BlockSummary] = ???
         }
 
       val relayingImpl = RelayingImpl[Task](nd, gossipService, relayFactor, relaySaturation)(
-        Sync[Task],
-        Par.fromParallel(CatsParallelForTask),
+        Concurrent[Task],
+        Parallel[Task],
         log,
         metrics,
         ask

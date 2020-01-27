@@ -3,14 +3,11 @@ use core::fmt;
 use parity_wasm::elements;
 use wasmi;
 
-use contract_ffi::bytesrepr;
-use contract_ffi::key::Key;
-use contract_ffi::system_contracts;
-use contract_ffi::uref::{AccessRights, URef};
-use contract_ffi::value::account::{
-    AddKeyFailure, RemoveKeyFailure, SetThresholdFailure, UpdateKeyFailure,
-};
 use engine_shared::transform::TypeMismatch;
+use types::{
+    account::{AddKeyFailure, RemoveKeyFailure, SetThresholdFailure, UpdateKeyFailure},
+    bytesrepr, system_contract_errors, AccessRights, CLValueError, Key, URef,
+};
 
 use crate::resolvers::error::ResolverError;
 
@@ -26,7 +23,6 @@ pub enum Error {
         required: AccessRights,
     },
     ForgedReference(URef),
-    ArgIndexOutOfBounds(usize),
     URefNotFound(String),
     FunctionNotFound(String),
     ParityWasm(elements::Error),
@@ -34,18 +30,23 @@ pub enum Error {
     Ret(Vec<URef>),
     Rng(rand::Error),
     ResolverError(ResolverError),
-    InvalidNonce {
-        deploy_nonce: u64,
-        expected_nonce: u64,
-    },
     /// Reverts execution with a provided status
     Revert(u32),
     AddKeyFailure(AddKeyFailure),
     RemoveKeyFailure(RemoveKeyFailure),
     UpdateKeyFailure(UpdateKeyFailure),
     SetThresholdFailure(SetThresholdFailure),
-    SystemContractError(system_contracts::error::Error),
+    SystemContractError(system_contract_errors::Error),
     DeploymentAuthorizationFailure,
+    ExpectedReturnValue,
+    UnexpectedReturnValue,
+    InvalidContext,
+    IncompatibleProtocolMajorVersion {
+        expected: u32,
+        actual: u32,
+    },
+    CLValue(CLValueError),
+    HostBufferEmpty,
 }
 
 impl fmt::Display for Error {
@@ -57,7 +58,7 @@ impl fmt::Display for Error {
 impl wasmi::HostError for Error {}
 
 impl From<!> for Error {
-    fn from(error: !) -> Error {
+    fn from(error: !) -> Self {
         match error {}
     }
 }
@@ -87,37 +88,43 @@ impl From<elements::Error> for Error {
 }
 
 impl From<ResolverError> for Error {
-    fn from(err: ResolverError) -> Error {
+    fn from(err: ResolverError) -> Self {
         Error::ResolverError(err)
     }
 }
 
 impl From<AddKeyFailure> for Error {
-    fn from(err: AddKeyFailure) -> Error {
+    fn from(err: AddKeyFailure) -> Self {
         Error::AddKeyFailure(err)
     }
 }
 
 impl From<RemoveKeyFailure> for Error {
-    fn from(err: RemoveKeyFailure) -> Error {
+    fn from(err: RemoveKeyFailure) -> Self {
         Error::RemoveKeyFailure(err)
     }
 }
 
 impl From<UpdateKeyFailure> for Error {
-    fn from(err: UpdateKeyFailure) -> Error {
+    fn from(err: UpdateKeyFailure) -> Self {
         Error::UpdateKeyFailure(err)
     }
 }
 
 impl From<SetThresholdFailure> for Error {
-    fn from(err: SetThresholdFailure) -> Error {
+    fn from(err: SetThresholdFailure) -> Self {
         Error::SetThresholdFailure(err)
     }
 }
 
-impl From<system_contracts::error::Error> for Error {
-    fn from(error: system_contracts::error::Error) -> Error {
+impl From<system_contract_errors::Error> for Error {
+    fn from(error: system_contract_errors::Error) -> Self {
         Error::SystemContractError(error)
+    }
+}
+
+impl From<CLValueError> for Error {
+    fn from(e: CLValueError) -> Self {
+        Error::CLValue(e)
     }
 }

@@ -4,11 +4,11 @@ use failure::Fail;
 use lmdb as lmdb_external;
 use wasmi;
 
-use contract_ffi::bytesrepr;
+use types::bytesrepr;
 
 use super::in_memory;
 
-#[derive(Debug, Fail, PartialEq, Eq)]
+#[derive(Debug, Clone, Fail, PartialEq, Eq)]
 pub enum Error {
     #[fail(display = "{}", _0)]
     Lmdb(#[fail(cause)] lmdb_external::Error),

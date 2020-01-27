@@ -1,39 +1,31 @@
 #![no_std]
-#![feature(cell_update)]
 
-#[macro_use]
-extern crate alloc;
-extern crate contract_ffi;
-
-use alloc::string::{String, ToString};
-use core::clone::Clone;
 use core::convert::Into;
 
-use contract_ffi::contract_api;
-use contract_ffi::contract_api::pointers::UPointer;
-use contract_ffi::key::Key;
-use contract_ffi::uref::{AccessRights, URef};
+use contract::{
+    contract_api::{runtime, storage, TURef},
+    unwrap_or_revert::UnwrapOrRevert,
+};
+use types::{AccessRights, CLValue, Key, URef};
 
 const DATA: &str = "data";
 const CONTRACT_NAME: &str = "create";
 
 #[no_mangle]
 pub extern "C" fn create() {
-    let reference: UPointer<String> = contract_api::new_uref(DATA.to_string());
+    let reference: TURef<&str> = storage::new_turef(&DATA);
 
     let read_only_reference: URef = {
-        let mut ret: UPointer<String> = reference.clone();
-        ret.1 = AccessRights::READ;
+        let mut ret: TURef<&str> = reference;
+        ret.set_access_rights(AccessRights::READ);
         ret.into()
     };
-
-    let extra_urefs = vec![read_only_reference];
-
-    contract_api::ret(&read_only_reference, &extra_urefs)
+    let return_value = CLValue::from_t(read_only_reference).unwrap_or_revert();
+    runtime::ret(return_value)
 }
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let contract: Key = contract_api::store_function(CONTRACT_NAME, Default::default()).into();
-    contract_api::add_uref(CONTRACT_NAME, &contract)
+    let contract: Key = storage::store_function_at_hash(CONTRACT_NAME, Default::default()).into();
+    runtime::put_key(CONTRACT_NAME, contract)
 }

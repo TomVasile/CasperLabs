@@ -1,8 +1,11 @@
 package io.casperlabs.crypto.codec
 
+import scala.util.Try
+
 object Base16 {
   def encode(input: Array[Byte]): String = bytes2hex(input, None)
 
+  /* Filters input from invalid characters */
   def decode(input: String): Array[Byte] = {
     val paddedInput =
       if (input.length % 2 == 0) input

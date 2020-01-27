@@ -1,25 +1,30 @@
 #![no_std]
-#![feature(cell_update)]
 
 extern crate alloc;
-extern crate contract_ffi;
 
-use contract_ffi::uref::{AccessRights, URef};
-use contract_ffi::value::account::PurseId;
+use alloc::string::String;
 
-// This value was acquired by observing the output of an execution of this
-// contract made by ACCOUNT_1.
-const EXPECTED_UREF_BYTES: [u8; 32] = [
-    0x5f, 0x36, 0x40, 0xb1, 0xa3, 0xd6, 0x5d, 0xe6, 0x4e, 0x5b, 0x62, 0xf2, 0x44, 0x08, 0xbf, 0x67,
-    0xf4, 0x67, 0xda, 0x2a, 0xc4, 0x2b, 0x5a, 0xb9, 0x52, 0xb7, 0xe5, 0x02, 0xd1, 0x52, 0xc1, 0xad,
-];
+use contract::{
+    contract_api::{runtime, system},
+    unwrap_or_revert::UnwrapOrRevert,
+};
+use types::ApiError;
 
+#[repr(u32)]
+enum Args {
+    PurseName = 0,
+}
+
+pub fn delegate() {
+    let purse_name: String = runtime::get_arg(Args::PurseName as u32)
+        .unwrap_or_revert_with(ApiError::MissingArgument)
+        .unwrap_or_revert_with(ApiError::InvalidArgument);
+    let purse_id = system::create_purse();
+    runtime::put_key(&purse_name, purse_id.value().into());
+}
+
+#[cfg(not(feature = "lib"))]
 #[no_mangle]
 pub extern "C" fn call() {
-    let expected_purse_id =
-        PurseId::new(URef::new(EXPECTED_UREF_BYTES, AccessRights::READ_ADD_WRITE));
-
-    let actual_purse_id = contract_ffi::contract_api::create_purse();
-
-    assert_eq!(actual_purse_id, expected_purse_id);
+    delegate()
 }

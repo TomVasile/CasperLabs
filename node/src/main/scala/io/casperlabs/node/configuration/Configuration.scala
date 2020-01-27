@@ -2,20 +2,19 @@ package io.casperlabs.node.configuration
 import java.nio.file.{Path, Paths}
 
 import cats.data.Validated.{Invalid, Valid}
-import cats.data.{NonEmptyList, ValidatedNel}
+import cats.data.ValidatedNel
 import cats.syntax.either._
 import cats.syntax.validated._
 import com.github.ghik.silencer.silent
 import eu.timepit.refined._
 import eu.timepit.refined.api.Refined
 import eu.timepit.refined.numeric._
-import io.casperlabs.blockstorage.LMDBBlockStorage
 import io.casperlabs.casper.CasperConf
-import io.casperlabs.comm.discovery.Node
+import io.casperlabs.comm.discovery.NodeUtils.NodeWithoutChainId
 import io.casperlabs.comm.transport.Tls
 import io.casperlabs.configuration.{relativeToDataDir, SubConfig}
 import io.casperlabs.node.configuration.Utils._
-
+import izumi.logstage.api.{Log => IzLog}
 import scala.concurrent.duration.FiniteDuration
 import scala.io.Source
 
@@ -24,17 +23,22 @@ import scala.io.Source
   * It's needed for proper hierarchy traversing by Magnolia typeclasses.
   */
 final case class Configuration(
+    log: Configuration.Log,
     server: Configuration.Server,
     grpc: Configuration.Grpc,
     tls: Tls,
     casper: CasperConf,
-    lmdb: LMDBBlockStorage.Config,
     blockstorage: Configuration.BlockStorage,
     metrics: Configuration.Kamon,
     influx: Option[Configuration.Influx]
 )
 
 object Configuration extends ParserImplicits {
+  case class Log(
+      level: IzLog.Level,
+      jsonPath: Option[Path]
+  ) extends SubConfig
+
   case class Kamon(
       prometheus: Boolean,
       zipkin: Boolean,
@@ -59,16 +63,18 @@ object Configuration extends ParserImplicits {
       dynamicHostAddress: Boolean,
       noUpnp: Boolean,
       defaultTimeout: FiniteDuration,
-      bootstrap: Option[Node],
+      bootstrap: List[NodeWithoutChainId],
       dataDir: Path,
       maxNumOfConnections: Int,
       maxMessageSize: Int,
-      chunkSize: Int,
-      useGossiping: Boolean,
+      eventStreamBufferSize: Int Refined Positive,
+      engineParallelism: Int Refined Positive,
+      chunkSize: Int Refined Positive,
       relayFactor: Int,
       relaySaturation: Int,
       approvalRelayFactor: Int,
       approvalPollInterval: FiniteDuration,
+      alivePeersCacheExpirationPeriod: FiniteDuration,
       syncMaxPossibleDepth: Int Refined Positive,
       syncMinBlockCountToCheckWidth: Int Refined NonNegative,
       syncMaxBondingRate: Double Refined GreaterEqual[W.`0.0`.T],
@@ -76,21 +82,28 @@ object Configuration extends ParserImplicits {
       initSyncMaxNodes: Int,
       initSyncMinSuccessful: Int Refined Positive,
       initSyncMemoizeNodes: Boolean,
-      initSyncSkipFailedNodes: Boolean,
       initSyncRoundPeriod: FiniteDuration,
+      initSyncSkipFailedNodes: Boolean,
+      initSyncStep: Int Refined Positive,
       initSyncMaxBlockCount: Int Refined Positive,
+      periodicSyncRoundPeriod: FiniteDuration,
       downloadMaxParallelBlocks: Int,
       downloadMaxRetries: Int Refined NonNegative,
       downloadRetryInitialBackoffPeriod: FiniteDuration,
       downloadRetryBackoffFactor: Double Refined GreaterEqual[W.`1.0`.T],
       relayMaxParallelBlocks: Int,
       relayBlockChunkConsumerTimeout: FiniteDuration,
-      cleanBlockStorage: Boolean
+      cleanBlockStorage: Boolean,
+      blockUploadRateMaxRequests: Int Refined NonNegative,
+      blockUploadRatePeriod: FiniteDuration,
+      blockUploadRateMaxThrottled: Int Refined NonNegative
   ) extends SubConfig
 
   case class BlockStorage(
-      latestMessagesLogMaxSizeFactor: Int,
-      cacheMaxSizeBytes: Long
+      cacheMaxSizeBytes: Long,
+      cacheNeighborhoodBefore: Int,
+      cacheNeighborhoodAfter: Int,
+      deployStreamChunkSize: Int
   ) extends SubConfig
 
   case class Grpc(
@@ -102,8 +115,7 @@ object Configuration extends ParserImplicits {
 
   sealed trait Command extends Product with Serializable
   object Command {
-    final case object Diagnostics extends Command
-    final case object Run         extends Command
+    final case object Run extends Command
   }
 
   def parse(
@@ -139,7 +151,6 @@ object Configuration extends ParserImplicits {
       .parse(cliByName, envVars, configFile, defaultConfigFile, Nil)
       .map(updatePaths(_, defaultDataDir))
       .toEither
-      .flatMap(updateTls(_, defaultConfigFile).leftMap(NonEmptyList(_, Nil)))
       .fold(Invalid(_), Valid(_))
 
   /**
@@ -193,40 +204,6 @@ object Configuration extends ParserImplicits {
     GenericPathUpdater.gen[Configuration].update(c)
   }
 
-  private[configuration] def updateTls(
-      c: Configuration,
-      defaultConfigFile: Map[CamelCase, String]
-  ): Either[String, Configuration] = {
-    val dataDir = c.server.dataDir
-    for {
-      defaultDataDir <- readDefaultDataDir
-      defaultCertificate <- defaultConfigFile
-                             .get(CamelCase("tlsCertificate"))
-                             .fold("tls.certificate must have default value".asLeft[Path])(
-                               s => Parser[Path].parse(s)
-                             )
-      defaultKey <- defaultConfigFile
-                     .get(CamelCase("tlsKey"))
-                     .fold("tls.key must have default value".asLeft[Path])(
-                       s => Parser[Path].parse(s)
-                     )
-    } yield {
-      val isCertCustomLocation = stripPrefix(c.tls.certificate, dataDir) != stripPrefix(
-        defaultCertificate,
-        defaultDataDir
-      )
-      val isKeyCustomLocation =
-        stripPrefix(c.tls.key, dataDir) !=
-          stripPrefix(defaultKey, defaultDataDir)
-      c.copy(
-        tls = c.tls.copy(
-          customCertificateLocation = isCertCustomLocation,
-          customKeyLocation = isKeyCustomLocation
-        )
-      )
-    }
-  }
-
   private def readDefaultDataDir: Either[String, Path] =
     for {
       defaultRaw <- readFile(Source.fromResource("default-configuration.toml"))
@@ -237,31 +214,4 @@ object Configuration extends ParserImplicits {
                     s => Parser[Path].parse(s)
                   )
     } yield dataDir
-
-  private[configuration] def parseToml(content: String): Map[CamelCase, String] = {
-    val tableRegex = """\[(.+)\]""".r
-    val valueRegex = """([a-z\-]+)\s*=\s*\"?([^\"]*)\"?""".r
-
-    val lines = content
-      .split('\n')
-    val withoutCommentsAndEmptyLines = lines
-      .filterNot(s => s.startsWith("#") || s.trim.isEmpty)
-      .map(_.trim)
-
-    val dashifiedMap: Map[String, String] = withoutCommentsAndEmptyLines
-      .foldLeft((Map.empty[String, String], Option.empty[String])) {
-        case ((acc, _), tableRegex(table)) =>
-          (acc, Some(table))
-        case ((acc, t @ Some(currentTable)), valueRegex(key, value)) =>
-          (acc + (currentTable + "-" + key -> value), t)
-        case (x, _) => x
-      }
-      ._1
-
-    val camelCasedMap: Map[CamelCase, String] = dashifiedMap.map {
-      case (k, v) => (dashToCamel(k), v)
-    }
-
-    camelCasedMap
-  }
 }

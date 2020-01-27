@@ -1,22 +1,23 @@
 package io.casperlabs.comm.gossiping
 
-import cats._
+import cats.data.NonEmptyList
 import cats.implicits._
 import com.google.protobuf.ByteString
 import io.casperlabs.casper.consensus._
+import io.casperlabs.comm.ServiceError.{InvalidArgument, Unavailable}
 import io.casperlabs.comm.discovery.{Node, NodeDiscovery, NodeIdentifier}
-import io.casperlabs.comm.ServiceError, ServiceError.{InvalidArgument, Unavailable}
 import io.casperlabs.shared.Log
 import monix.eval.Task
 import monix.execution.Scheduler
 import monix.tail.Iterant
-import org.scalatest._
-import scala.concurrent.duration._
-import scala.concurrent.TimeoutException
-import org.scalacheck.Gen
 import org.scalacheck.Arbitrary.arbitrary
+import org.scalacheck.Gen
+import org.scalatest._
 
-class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConsensus {
+import scala.concurrent.TimeoutException
+import scala.concurrent.duration._
+
+class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConsensusAndComm {
   import GenesisApproverSpec._
   import Scheduler.Implicits.global
 
@@ -77,7 +78,7 @@ class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConse
     }
   }
 
-  "fromBootstrap" should {
+  "fromBootstraps" should {
     "return UNAVAILABLE while there is no candidate" in {
       TestFixture.fromBootstrap(
         remoteCandidate = () => Task.raiseError(Unavailable("No candidate here."))
@@ -191,7 +192,7 @@ class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConse
         }
       ) { approver =>
         for {
-          _ <- Task.sleep(50.millis)
+          _ <- Task.sleep(250.millis)
           r <- approver.getCandidate
         } yield {
           r.right.get.approvals should have size 1
@@ -454,9 +455,10 @@ class GenesisApproverSpec extends WordSpecLike with Matchers with ArbitraryConse
   }
 }
 
-object GenesisApproverSpec extends ArbitraryConsensus {
-  implicit val noLog           = new Log.NOPLog[Task]
-  implicit val consensusConfig = ConsensusConfig()
+object GenesisApproverSpec extends ArbitraryConsensusAndComm {
+  implicit val noLog               = Log.NOPLog[Task]
+  implicit val consensusConfig     = ConsensusConfig()
+  implicit val chainId: ByteString = sample(genHash)
 
   val peers = sample {
     Gen.listOfN(10, arbitrary[Node])
@@ -479,12 +481,15 @@ object GenesisApproverSpec extends ArbitraryConsensus {
     override def discover                            = ???
     override def lookup(id: NodeIdentifier)          = ???
     override def recentlyAlivePeersAscendingDistance = Task.now(peers)
+    override def banTemp(node: Node): Task[Unit]     = ???
   }
 
   class MockGossipService extends GossipService[Task] {
     override def newBlocks(request: NewBlocksRequest)                                       = ???
     override def streamAncestorBlockSummaries(request: StreamAncestorBlockSummariesRequest) = ???
-    override def streamDagTipBlockSummaries(request: StreamDagTipBlockSummariesRequest)     = ???
+    override def streamLatestMessages(
+        request: StreamLatestMessagesRequest
+    ): Iterant[Task, Block.Justification] = ???
     override def streamBlockSummaries(
         request: StreamBlockSummariesRequest
     ): Iterant[Task, BlockSummary]                                    = ???
@@ -493,6 +498,10 @@ object GenesisApproverSpec extends ArbitraryConsensus {
     override def getGenesisCandidate(
         request: GetGenesisCandidateRequest
     ): Task[GenesisCandidate] = ???
+
+    override def streamDagSliceBlockSummaries(
+        request: StreamDagSliceBlockSummariesRequest
+    ): Iterant[Task, BlockSummary] = ???
   }
   object MockGossipService {
     class Bootstrap(getCandidate: () => Task[GenesisCandidate]) extends MockGossipService() {
@@ -553,7 +562,7 @@ object GenesisApproverSpec extends ArbitraryConsensus {
         implicit scheduler: Scheduler
     ): Unit =
       GenesisApproverImpl
-        .fromBootstrap[Task](
+        .fromBootstraps[Task](
           backend = environment,
           new MockNodeDiscovery(peers),
           connectToGossip = (node: Node) =>
@@ -564,7 +573,7 @@ object GenesisApproverSpec extends ArbitraryConsensus {
                 gossipService
             },
           relayFactor,
-          bootstrap,
+          NonEmptyList.one(bootstrap),
           pollInterval,
           downloadManager = environment
         )

@@ -8,7 +8,7 @@ import cats._
 import cats.effect.{Sync, Timer}
 import cats.implicits._
 import io.casperlabs.client.{DeployRuntime, DeployService}
-import io.casperlabs.client.configuration.Contracts
+import io.casperlabs.client.configuration.DeployConfig
 import io.casperlabs.crypto.Keys
 import io.casperlabs.crypto.Keys.{PrivateKey, PublicKey}
 import io.casperlabs.crypto.codec.Base64
@@ -55,17 +55,15 @@ object Benchmarks {
         )
 
     def send(
-        nonce: Long,
-        recipientPublicKeyBase64: String,
+        recipientPublicKey: PublicKey,
         senderPrivateKey: PrivateKey,
         senderPublicKey: PublicKey,
         amount: Long
     ): F[Unit] = DeployRuntime.transfer[F](
-      nonce = nonce,
-      contracts = Contracts.empty,
+      deployConfig = DeployConfig.empty,
       senderPublicKey = senderPublicKey,
       senderPrivateKey = senderPrivateKey,
-      recipientPublicKeyBase64 = recipientPublicKeyBase64,
+      recipientPublicKey = recipientPublicKey,
       amount = amount,
       exit = false,
       ignoreOutput = true
@@ -78,7 +76,6 @@ object Benchmarks {
       List.fill(accountsNum)(createAccountKeyPair())
     val recipient @ (_, recipientPublicKey): (Keys.PrivateKey, Keys.PublicKey) =
       createAccountKeyPair()
-    val recipientBase64 = Base64.encode(recipientPublicKey)
 
     def initializeAccounts(
         initialFundsPrivateKey: PrivateKey,
@@ -86,12 +83,11 @@ object Benchmarks {
     ): F[Unit] =
       for {
         _ <- Log[F].info("Initializing accounts...")
-        _ <- (recipient :: senders).zipWithIndex.traverse {
-              case ((_, pk), i) =>
+        _ <- (recipient :: senders).traverse {
+              case (_, pk) =>
                 for {
                   _ <- send(
-                        nonce = i.toLong + 1L,
-                        recipientPublicKeyBase64 = Base64.encode(pk),
+                        recipientPublicKey = pk,
                         senderPrivateKey = initialFundsPrivateKey,
                         senderPublicKey = initialFundsPublicKey,
                         amount = initialFundsPerAccount
@@ -102,14 +98,13 @@ object Benchmarks {
             }
       } yield ()
 
-    def oneRoundTransfer(nonce: Long): F[Unit] =
+    def oneRoundTransfer(): F[Unit] =
       for {
         _ <- Log[F].info("Sending deploys...")
         _ <- senders.traverse {
               case (sk, pk) =>
                 send(
-                  nonce = nonce,
-                  recipientPublicKeyBase64 = recipientBase64,
+                  recipientPublicKey = recipientPublicKey,
                   senderPrivateKey = sk,
                   senderPublicKey = pk,
                   amount = 1
@@ -155,7 +150,7 @@ object Benchmarks {
         deployTime: FiniteDuration,
         proposeTime: FiniteDuration,
         total: FiniteDuration,
-        nonce: Long
+        round: Long
     ): F[Unit] = {
       def format(fd: FiniteDuration): String = fd.toCoarsest.toString()
       val message =
@@ -167,25 +162,25 @@ object Benchmarks {
         StandardCharsets.UTF_8,
         StandardOpenOption.WRITE ::
           StandardOpenOption.APPEND :: Nil
-      ) >> Log[F].info(s"Round: ${nonce - 1}: $message")
+      ) >> Log[F].info(s"${round - 1 -> "round"}: $message")
     }
 
-    def round(nonce: Long): F[Unit] =
+    def round(round: Long): F[Unit] =
       for {
-        _                        <- Log[F].info(s"Starting new round ${nonce - 1}")
-        (deployTime, _)          <- measure(oneRoundTransfer(nonce))
+        _                        <- Log[F].info(s"Starting new round: $round")
+        (deployTime, _)          <- measure(oneRoundTransfer())
         (proposeTime, blockHash) <- measure(propose(print = true))
         _                        <- checkSuccess(blockHash, accountsNum)
         totalTime                = deployTime + proposeTime
-        _                        <- writeResults(deployTime, proposeTime, totalTime, nonce)
+        _                        <- writeResults(deployTime, proposeTime, totalTime, round)
       } yield ()
 
     def rounds(n: Int): F[Unit] = {
-      def loop(nonce: Long): F[Unit] =
-        if (nonce == n) {
+      def loop(roundNum: Long): F[Unit] =
+        if (roundNum == n) {
           Monad[F].unit
         } else {
-          round(nonce).flatMap(_ => loop(nonce + 1))
+          round(roundNum).flatMap(_ => loop(roundNum + 1))
         }
 
       for {

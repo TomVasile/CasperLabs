@@ -1,33 +1,32 @@
-use std::collections::HashMap;
+use engine_test_support::low_level::{
+    DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR,
+    DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT, STANDARD_PAYMENT_CONTRACT,
+};
+use types::account::PublicKey;
 
-use contract_ffi::value::account::PublicKey;
-
-use crate::support::test_support::{WasmTestBuilder, DEFAULT_BLOCK_TIME};
-
-const GENESIS_ADDR: [u8; 32] = [6u8; 32];
+const CONTRACT_KEY_MANAGEMENT_THRESHOLDS: &str = "key_management_thresholds.wasm";
 
 #[ignore]
 #[test]
 fn should_verify_key_management_permission_with_low_weight() {
-    WasmTestBuilder::default()
-        .run_genesis(GENESIS_ADDR, HashMap::new())
-        .exec_with_args(
-            GENESIS_ADDR,
-            "key_management_thresholds.wasm",
-            DEFAULT_BLOCK_TIME,
-            1,
-            (String::from("init"),),
-        )
+    let exec_request_1 = ExecuteRequestBuilder::standard(
+        DEFAULT_ACCOUNT_ADDR,
+        CONTRACT_KEY_MANAGEMENT_THRESHOLDS,
+        (String::from("init"),),
+    )
+    .build();
+    let exec_request_2 = ExecuteRequestBuilder::standard(
+        DEFAULT_ACCOUNT_ADDR,
+        CONTRACT_KEY_MANAGEMENT_THRESHOLDS,
+        (String::from("test-permission-denied"),),
+    )
+    .build();
+    InMemoryWasmTestBuilder::default()
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request_1)
         .expect_success()
         .commit()
-        .exec_with_args(
-            GENESIS_ADDR,
-            "key_management_thresholds.wasm",
-            DEFAULT_BLOCK_TIME,
-            2,
-            // This test verifies that any other error than PermissionDenied would revert
-            (String::from("test-permission-denied"),),
-        )
+        .exec(exec_request_2)
         .expect_success()
         .commit();
 }
@@ -35,30 +34,36 @@ fn should_verify_key_management_permission_with_low_weight() {
 #[ignore]
 #[test]
 fn should_verify_key_management_permission_with_sufficient_weight() {
-    WasmTestBuilder::default()
-        .run_genesis(GENESIS_ADDR, HashMap::new())
-        .exec_with_args(
-            GENESIS_ADDR,
-            "key_management_thresholds.wasm",
-            DEFAULT_BLOCK_TIME,
-            1,
-            (String::from("init"),),
-        )
-        .expect_success()
-        .commit()
-        .exec_with_args_and_keys(
-            GENESIS_ADDR,
-            "key_management_thresholds.wasm",
-            DEFAULT_BLOCK_TIME,
-            2,
+    let exec_request_1 = ExecuteRequestBuilder::standard(
+        DEFAULT_ACCOUNT_ADDR,
+        CONTRACT_KEY_MANAGEMENT_THRESHOLDS,
+        (String::from("init"),),
+    )
+    .build();
+    let exec_request_2 = {
+        let deploy = DeployItemBuilder::new()
+            .with_address(DEFAULT_ACCOUNT_ADDR)
+            .with_payment_code(STANDARD_PAYMENT_CONTRACT, (*DEFAULT_PAYMENT,))
             // This test verifies that all key management operations succeed
-            (String::from("test-key-mgmnt-succeed"),),
-            vec![
-                PublicKey::new(GENESIS_ADDR),
+            .with_session_code(
+                "key_management_thresholds.wasm",
+                (String::from("test-key-mgmnt-succeed"),),
+            )
+            .with_deploy_hash([2u8; 32])
+            .with_authorization_keys(&[
+                PublicKey::new(DEFAULT_ACCOUNT_ADDR),
                 // Key [42; 32] is created in init stage
                 PublicKey::new([42; 32]),
-            ],
-        )
+            ])
+            .build();
+        ExecuteRequestBuilder::from_deploy_item(deploy).build()
+    };
+    InMemoryWasmTestBuilder::default()
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request_1)
+        .expect_success()
+        .commit()
+        .exec(exec_request_2)
         .expect_success()
         .commit();
 }

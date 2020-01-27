@@ -1,23 +1,23 @@
-use std::collections::HashMap;
+use engine_test_support::low_level::{
+    ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG,
+};
 
-use crate::support::test_support::WasmTestBuilder;
-
-const GENESIS_ADDR: [u8; 32] = [7u8; 32];
+const CONTRACT_GET_BLOCKTIME: &str = "get_blocktime.wasm";
 
 #[ignore]
 #[test]
 fn should_run_get_blocktime_contract() {
     let block_time: u64 = 42;
-
-    WasmTestBuilder::default()
-        .run_genesis(GENESIS_ADDR, HashMap::new())
-        .exec_with_args(
-            GENESIS_ADDR,
-            "get_blocktime.wasm",
-            block_time,
-            1,
-            (block_time,), // passing this to contract to test assertion
-        )
+    let exec_request = ExecuteRequestBuilder::standard(
+        DEFAULT_ACCOUNT_ADDR,
+        CONTRACT_GET_BLOCKTIME,
+        (block_time,),
+    )
+    .with_block_time(block_time)
+    .build();
+    InMemoryWasmTestBuilder::default()
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request)
         .commit()
         .expect_success();
 }

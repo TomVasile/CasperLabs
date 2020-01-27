@@ -2,27 +2,43 @@ import React from 'react';
 import { observer } from 'mobx-react';
 import DagContainer, { DagStep } from '../containers/DagContainer';
 import {
-  RefreshableComponent,
-  ListInline,
   IconButton,
+  ListInline,
+  RefreshableComponent,
   shortHash
 } from './Utils';
 import DataTable from './DataTable';
-import { BlockInfo } from '../grpc/io/casperlabs/casper/consensus/info_pb';
-import { encodeBase16 } from '../lib/Conversions';
-import { Link } from 'react-router-dom';
+import { BlockInfo } from 'casperlabs-grpc/io/casperlabs/casper/consensus/info_pb';
+import { Link, RouteComponentProps, withRouter } from 'react-router-dom';
 import Pages from './Pages';
-import TimeAgo from 'javascript-time-ago';
-import en from 'javascript-time-ago/locale/en';
+import { encodeBase16 } from 'casperlabs-sdk';
+import Timestamp from './TimeStamp';
+import * as H from 'history';
 
-interface Props {
+export interface Props extends RouteComponentProps<{}> {
   dag: DagContainer;
+  maxRank: string | null;
+  depth: string | null;
 }
 
 @observer
-export default class BlockList extends RefreshableComponent<Props, {}> {
+class _BlockList extends RefreshableComponent<Props, {}> {
+  constructor(props:Props) {
+    super(props);
+    let maxRank = parseInt(props.maxRank || '') || 0;
+    let depth = parseInt(props.depth || '') || 10;
+    this.props.dag.updateMaxRankAndDepth(maxRank, depth);
+    this.props.dag.refreshBlockDagAndSetupSubscriber();
+  }
+
   async refresh() {
-    this.props.dag.refreshBlockDag();
+    await this.props.dag.refreshBlockDagAndSetupSubscriber();
+  }
+
+  componentWillUnmount() {
+    super.componentWillUnmount();
+    // release websocket if necessary
+    this.props.dag.unsubscribe();
   }
 
   render() {
@@ -35,6 +51,7 @@ export default class BlockList extends RefreshableComponent<Props, {}> {
             : `Blocks from rank ${dag.minRank} to ${dag.maxRank}`
         }
         refresh={() => this.refresh()}
+        subscribeToggleStore={dag.subscribeToggleStore}
         headers={['Block hash', 'Rank', 'Timestamp', 'Validator']}
         rows={dag.blocks}
         renderRow={(block: BlockInfo) => {
@@ -53,44 +70,52 @@ export default class BlockList extends RefreshableComponent<Props, {}> {
             </tr>
           );
         }}
-        footerMessage={<DagStepButtons step={dag.step} />}
+        footerMessage={
+          <DagStepButtons
+            step={dag.step}
+            history={this.props.history}
+            urlWithRankAndDepth={Pages.blocksWithMaxRankAndDepth}
+          />
+        }
       />
     );
   }
 }
 
-TimeAgo.addLocale(en);
-const timeAgo = new TimeAgo();
+const BlockList = withRouter(_BlockList);
+export default BlockList;
 
-const Timestamp = (props: { timestamp: number }) => {
-  // Genesis has 0 timestamp which would print 50 years ago.
-  const d = new Date(props.timestamp);
-  return props.timestamp ? (
-    <span title={d.toISOString()}>{timeAgo.format(d)}</span>
-  ) : null;
-};
-
-export const DagStepButtons = (props: { step: DagStep }) => {
+export const DagStepButtons = (props: {
+  step: DagStep;
+  history: H.History;
+  urlWithRankAndDepth: (maxRank: number, depth: number) => string;
+}) => {
+  const updateUrlQuery = (stepFunc: () => void) => {
+    stepFunc();
+    props.history.push(
+      props.urlWithRankAndDepth(props.step.maxRank, props.step.depth)
+    );
+  };
   return (
     <ListInline>
       <IconButton
         title="First"
-        onClick={() => props.step.first()}
+        onClick={() => updateUrlQuery(props.step.first)}
         icon="fast-backward"
       />
       <IconButton
         title="Previous"
-        onClick={() => props.step.prev()}
+        onClick={() => updateUrlQuery(props.step.prev)}
         icon="step-backward"
       />
       <IconButton
         title="Next"
-        onClick={() => props.step.next()}
+        onClick={() => updateUrlQuery(props.step.next)}
         icon="step-forward"
       />
       <IconButton
         title="Last"
-        onClick={() => props.step.last()}
+        onClick={() => updateUrlQuery(props.step.last)}
         icon="fast-forward"
       />
     </ListInline>

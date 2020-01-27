@@ -1,64 +1,43 @@
 #![no_std]
 
-extern crate alloc;
-extern crate contract_ffi;
+use contract::{
+    contract_api::{account, runtime, system},
+    unwrap_or_revert::UnwrapOrRevert,
+};
+use types::{account::PurseId, ApiError, U512};
 
-use alloc::vec::Vec;
-
-use contract_ffi::contract_api::pointers::{ContractPointer, UPointer};
-use contract_ffi::contract_api::{self, PurseTransferResult};
-use contract_ffi::key::Key;
-use contract_ffi::uref::AccessRights;
-use contract_ffi::value::account::PurseId;
-use contract_ffi::value::uint::U512;
-
+#[repr(u16)]
 enum Error {
-    GetPosOuterURef = 1,
-    GetPosInnerURef = 2,
-    TransferFromSourceToPayment = 3,
-    TransferFromPaymentToSource = 4,
-    GetBalance = 5,
-    CheckBalance = 6,
+    TransferFromSourceToPayment = 0,
+    TransferFromPaymentToSource,
+    GetBalance,
+    CheckBalance,
 }
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let pos_pointer = {
-        let outer: UPointer<Key> = contract_api::get_uref("pos")
-            .and_then(Key::to_u_ptr)
-            .unwrap_or_else(|| contract_api::revert(Error::GetPosInnerURef as u32));
-        if let Some(ContractPointer::URef(inner)) = contract_api::read::<Key>(outer).to_c_ptr() {
-            ContractPointer::URef(UPointer::new(inner.0, AccessRights::READ))
-        } else {
-            contract_api::revert(Error::GetPosOuterURef as u32);
-        }
-    };
-
-    let source_purse = contract_api::main_purse();
+    let pos_pointer = system::get_proof_of_stake();
+    let source_purse = account::get_main_purse();
     let payment_amount: U512 = 100.into();
-    let payment_purse: PurseId =
-        contract_api::call_contract(pos_pointer, &("get_payment_purse",), &Vec::new());
+    // amount passed to payment contract
+    let payment_fund: U512 = runtime::get_arg(0)
+        .unwrap_or_revert_with(ApiError::MissingArgument)
+        .unwrap_or_revert_with(ApiError::InvalidArgument);
+    let payment_purse: PurseId = runtime::call_contract(pos_pointer, ("get_payment_purse",));
 
     // can deposit
-    if let PurseTransferResult::TransferError =
-        contract_api::transfer_from_purse_to_purse(source_purse, payment_purse, payment_amount)
-    {
-        contract_api::revert(Error::TransferFromSourceToPayment as u32);
-    }
+    system::transfer_from_purse_to_purse(source_purse, payment_purse, payment_amount)
+        .unwrap_or_revert_with(ApiError::User(Error::TransferFromSourceToPayment as u16));
 
-    let payment_balance = match contract_api::get_balance(payment_purse) {
-        Some(amount) => amount,
-        None => contract_api::revert(Error::GetBalance as u32),
-    };
+    let payment_balance = system::get_balance(payment_purse)
+        .unwrap_or_revert_with(ApiError::User(Error::GetBalance as u16));
 
-    if payment_balance != payment_amount {
-        contract_api::revert(Error::CheckBalance as u32)
+    if payment_balance.saturating_sub(payment_fund) != payment_amount {
+        runtime::revert(ApiError::User(Error::CheckBalance as u16))
     }
 
     // cannot withdraw
-    if let PurseTransferResult::TransferSuccessful =
-        contract_api::transfer_from_purse_to_purse(payment_purse, source_purse, payment_amount)
-    {
-        contract_api::revert(Error::TransferFromPaymentToSource as u32);
+    if system::transfer_from_purse_to_purse(payment_purse, source_purse, payment_amount).is_ok() {
+        runtime::revert(ApiError::User(Error::TransferFromPaymentToSource as u16));
     }
 }

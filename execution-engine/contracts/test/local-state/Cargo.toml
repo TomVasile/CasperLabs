@@ -5,12 +5,14 @@ authors = ["Michał Papierski <michal@casperlabs.io>"]
 edition = "2018"
 
 [lib]
-name = "local_state"
-crate-type = ["cdylib"]
+crate-type = ["lib", "cdylib"]
+bench = false
+doctest = false
+test = false
 
 [features]
-default = []
-std = ["contract-ffi/std"]
+std = ["contract/std"]
+lib = []
 
 [dependencies]
-contract-ffi = { path = "../../../contract-ffi", package = "casperlabs-contract-ffi" }
+contract = { path = "../../../contract", package = "casperlabs-contract" }

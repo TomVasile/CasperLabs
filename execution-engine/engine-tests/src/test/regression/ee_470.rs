@@ -1,17 +1,20 @@
-use std::collections::HashMap;
-
-use crate::support::test_support::{WasmTestBuilder, DEFAULT_BLOCK_TIME};
 use engine_storage::global_state::in_memory::InMemoryGlobalState;
+use engine_test_support::low_level::{
+    ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG,
+};
 
-const GENESIS_ADDR: [u8; 32] = [12; 32];
+const CONTRACT_LOCAL_STATE: &str = "local_state.wasm";
 
 #[ignore]
 #[test]
 fn regression_test_genesis_hash_mismatch() {
-    let mut builder_base = WasmTestBuilder::default();
+    let mut builder_base = InMemoryWasmTestBuilder::default();
+
+    let exec_request_1 =
+        ExecuteRequestBuilder::standard(DEFAULT_ACCOUNT_ADDR, CONTRACT_LOCAL_STATE, ()).build();
 
     // Step 1.
-    let builder = builder_base.run_genesis(GENESIS_ADDR, HashMap::new());
+    let builder = builder_base.run_genesis(&DEFAULT_GENESIS_CONFIG);
 
     // This is trie's post state hash after calling run_genesis endpoint.
     // Step 1a)
@@ -20,27 +23,24 @@ fn regression_test_genesis_hash_mismatch() {
 
     let empty_root_hash = {
         let gs = InMemoryGlobalState::empty().expect("Empty GlobalState.");
-        gs.root_hash
+        gs.empty_root_hash
     };
 
     // This is trie's post state hash after committing genesis effects on top of
     // empty trie. Step 1b)
     let genesis_transforms_hash = builder
         .commit_effects(empty_root_hash.to_vec(), genesis_transforms)
-        .get_poststate_hash();
+        .get_post_state_hash();
 
     // They should match.
     assert_eq!(genesis_run_hash, genesis_transforms_hash);
 
     // Step 2.
-    builder
-        .exec(GENESIS_ADDR, "local_state.wasm", DEFAULT_BLOCK_TIME, 1)
-        .commit()
-        .expect_success();
+    builder.exec(exec_request_1).commit().expect_success();
 
     // No step 3.
     // Step 4.
-    builder.run_genesis(GENESIS_ADDR, HashMap::new());
+    builder.run_genesis(&DEFAULT_GENESIS_CONFIG);
 
     // Step 4a)
     let second_genesis_run_hash = builder.get_genesis_hash();
@@ -49,7 +49,7 @@ fn regression_test_genesis_hash_mismatch() {
     // Step 4b)
     let second_genesis_transforms_hash = builder
         .commit_effects(empty_root_hash.to_vec(), second_genesis_transforms)
-        .get_poststate_hash();
+        .get_post_state_hash();
 
     assert_eq!(second_genesis_run_hash, second_genesis_transforms_hash);
 

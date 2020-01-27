@@ -1,22 +1,17 @@
 #![no_std]
-#![feature(cell_update)]
 
-extern crate alloc;
-
-extern crate contract_ffi;
-
-use contract_ffi::contract_api::{add_uref, get_uref, new_uref};
-use contract_ffi::key::Key;
+use contract::contract_api::{runtime, storage};
+use types::Key;
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let res1 = get_uref("nonexistinguref");
+    let res1 = runtime::get_key("nonexistinguref");
     assert!(res1.is_none());
 
-    let key = Key::URef(new_uref(()).into());
-    add_uref("nonexistinguref", &key);
+    let key = Key::URef(storage::new_turef(()).into());
+    runtime::put_key("nonexistinguref", key);
 
-    let res2 = get_uref("nonexistinguref");
+    let res2 = runtime::get_key("nonexistinguref");
 
     assert_eq!(res2, Some(key));
 }

@@ -6,17 +6,18 @@ import cats.effect.implicits._
 import cats.implicits._
 import fs2.concurrent.Queue
 import fs2.{Pipe, Stream}
-import io.casperlabs.blockstorage.BlockStorage
 import io.casperlabs.casper.MultiParentCasperRef.MultiParentCasperRef
-import io.casperlabs.casper.deploybuffer.DeployBuffer
-import io.casperlabs.casper.finality.singlesweep.FinalityDetector
-import io.casperlabs.catscontrib.MonadThrowable
+import io.casperlabs.catscontrib.{Fs2Compiler, MonadThrowable}
+import io.casperlabs.metrics.Metrics
 import io.casperlabs.node.api.graphql.GraphQLQuery._
 import io.casperlabs.node.api.graphql.ProtocolState.Subscriptions
 import io.casperlabs.node.api.graphql.circe._
 import io.casperlabs.node.api.graphql.schema.GraphQLSchemaBuilder
 import io.casperlabs.shared.{Log, LogSource}
 import io.casperlabs.smartcontracts.ExecutionEngineService
+import io.casperlabs.storage.block._
+import io.casperlabs.storage.deploy.DeployStorage
+import io.casperlabs.storage.dag.DagStorage
 import io.circe.parser.parse
 import io.circe.syntax._
 import io.circe.{Json, JsonObject}
@@ -36,12 +37,13 @@ import scala.util.{Failure, Success}
   */
 object GraphQL {
 
+  private[graphql] implicit val MetricsSource = Metrics.Source(Metrics.BaseSource, "graphql")
+
   private[graphql] val requiredHeaders =
     Headers.of(Header("Upgrade", "websocket"), Header("Sec-WebSocket-Protocol", "graphql-ws"))
-  private implicit val logSource: LogSource = LogSource(getClass)
 
   /* Entry point */
-  def service[F[_]: ConcurrentEffect: ContextShift: Timer: Log: MultiParentCasperRef: FinalityDetector: BlockStorage: FinalizedBlocksStream: ExecutionEngineService: DeployBuffer](
+  def service[F[_]: ConcurrentEffect: ContextShift: Timer: Log: MultiParentCasperRef: BlockStorage: FinalizedBlocksStream: ExecutionEngineService: DeployStorage: DagStorage: Fs2Compiler: Metrics](
       executionContext: ExecutionContext
   ): HttpRoutes[F] = {
     import io.casperlabs.node.api.graphql.RunToFuture.fromEffect
@@ -55,7 +57,7 @@ object GraphQL {
     )
   }
 
-  private[graphql] def buildRoute[F[_]: Concurrent: ContextShift: Timer: Log: Fs2SubscriptionStream](
+  private[graphql] def buildRoute[F[_]: Concurrent: ContextShift: Timer: Log: Fs2SubscriptionStream: Metrics](
       executor: Executor[Unit, Unit],
       keepAlivePeriod: FiniteDuration,
       ec: ExecutionContext
@@ -66,12 +68,21 @@ object GraphQL {
       case req @ GET -> Root if requiredHeaders.forall(h => req.headers.exists(_ === h)) =>
         handleWebSocket(executor, keepAlivePeriod)
       case GET -> Root =>
-        StaticFile.fromResource[F]("/graphql-playground.html", ec).getOrElseF(NotFound())
+        StaticFile
+          .fromResource[F]("/graphql-playground.html", Blocker.liftExecutionContext(ec))
+          .getOrElseF(NotFound())
       case req @ POST -> Root =>
         val res: F[Response[F]] = for {
-          json  <- req.as[Json]
-          query <- Sync[F].fromEither(json.as[GraphQLQuery])
-          res   <- processHttpQuery(query, executor, ec).flatMap(Ok(_))
+          json                 <- req.as[Json]
+          query                <- Sync[F].fromEither(json.as[GraphQLQuery])
+          isIntrospectionQuery = query.query.contains("__schema")
+          runQuery             = processHttpQuery(query, executor, ec).flatMap(Ok(_))
+          res <- if (isIntrospectionQuery) {
+                  runQuery
+                } else {
+                  Log[F].debug(s"GraphQL query: ${query.query}") >>
+                    Metrics[F].timer("query")(runQuery)
+                }
         } yield res
 
         res.handleErrorWith {
@@ -132,16 +143,19 @@ object GraphQL {
             .flatMap(_.as[GraphQLWebSocketMessage])
             .fold(
               e => {
-                val errorMessage =
+                val error =
                   s"Failed to parse GraphQL WebSocket message: $raw, reason: ${e.getMessage}"
                 Stream
                   .eval(
-                    Log[F].warn(errorMessage) >> queue
-                      .enqueue1(GraphQLWebSocketMessage.ConnectionError(errorMessage))
+                    Log[F].warn(s"${error -> "error" -> null}") >> queue
+                      .enqueue1(GraphQLWebSocketMessage.ConnectionError(error))
                   )
                   .flatMap(_ => Stream.empty.covary[F])
               },
-              m => Stream.emit[F, GraphQLWebSocketMessage](m)
+              m =>
+                Stream.eval[F, GraphQLWebSocketMessage](
+                  Log[F].debug(s"Received subscription query: $m") >> m.pure[F]
+                )
             )
         case _ => Stream.empty.covary[F]
       }
@@ -216,7 +230,7 @@ object GraphQL {
         case (protocolState, message) =>
           val error = s"Unexpected message: $message in state: '${protocolState.name}', ignoring"
           for {
-            _ <- Log[F].warn(error)
+            _ <- Log[F].warn(s"${error -> "error" -> null}")
             _ <- queue.enqueue1(GraphQLWebSocketMessage.ConnectionError(error))
           } yield (protocolState, ())
       }

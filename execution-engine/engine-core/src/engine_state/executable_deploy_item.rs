@@ -1,3 +1,4 @@
+#[derive(Clone, PartialEq, Eq)]
 pub enum ExecutableDeployItem {
     ModuleBytes {
         module_bytes: Vec<u8>,
@@ -18,7 +19,7 @@ pub enum ExecutableDeployItem {
 }
 
 impl ExecutableDeployItem {
-    pub fn args(&self) -> &[u8] {
+    pub fn take_args(self) -> Vec<u8> {
         match self {
             ExecutableDeployItem::ModuleBytes { args, .. } => args,
             ExecutableDeployItem::StoredContractByHash { args, .. } => args,

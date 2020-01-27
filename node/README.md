@@ -33,14 +33,14 @@ The node module comes with an executable (jar, docker image, debian or fedora pa
 To see the list of available flags you can run `./casperlabs-node --help`
 
 ### 2.1 The Node
-By default when you execute the program, it will fire up a running node instance. That instance will become either a bootstrap node (see `--standalone` flag) or will try to connect to existing bootstrap.
+By default when you execute the program, it will fire up a running node instance. That instance will become either a bootstrap node (see `--casper-standalone` flag) or will try to connect to existing bootstrap.
 
 Node will instantiate a peer-to-peer network. It will either connect to some already existing node in the network (called bootstrap node) or will create a new network (essentially acting as bootstrap node). __Note__ This release prints a great deal of diagnostic information.
 
 An CasperLabs node is addressed by a "node address", which has the following form
 
 ```
-casperlabs://<address-key>@<host-or-ip>:<tcp-port>
+casperlabs://<address-key>:<chain id>@<host-or-ip>:<tcp-port>
 ```
 
 This version generates (non-cryptographically) random address keys of 128 bits, or 32 characters (UUIDs,
@@ -53,7 +53,7 @@ Using flags you can specify which bootstrapping node should be used or if the no
 
 #### 2.1.1 gRPC API
 
-Node exposes its API via gRPC services, which are exposed on `grpc-port`. To see the list of all available services, RPC calls, possible requests and responses, please see [models/src/main/protobuf/CasperMessage.proto](https://github.com/CasperLabs/CasperLabs/blob/dev/models/src/main/protobuf/CasperMessage.proto)
+Node exposes its API via gRPC services, which are exposed on `grpc-port`. To see the list of all available services, RPC calls, possible requests and responses, please see [casper.proto](../protobuf/io/casperlabs/node/api/casper.proto)
 
 #### 2.1.2 Data directory
 
@@ -70,7 +70,7 @@ An easy way to run CasperLabs Node is by using Docker. Use this pull command in 
 
 ```docker pull casperlabs/node```
 
-You can also [build a docker image yourself](#building-via-docker) and then run it.
+You can also [build a docker image yourself](https://github.com/CasperLabs/CasperLabs/tree/dev/node#12-building-docker-image) and then run it.
 
 ```console
 $ docker run -ti casperlabs/node run
@@ -93,7 +93,7 @@ $ docker run -ti casperlabs/node run
 15:01:58.891 [main] INFO  i.casperlabs.casper.genesis.Genesis$ - Created validator 673c9928ee163cd31fa2f081743ac3c4c691b69597d68dcdd6a65db2bcbf4df8 with bond 1
 15:01:58.893 [main] INFO  i.casperlabs.casper.genesis.Genesis$ - Created validator 4535b3d824e5efa32f85477e199e39594b8910079a362df864e733861dad3025 with bond 5
 15:01:58.899 [main] WARN  i.c.casper.ValidatorIdentity$ - No private key detected, cannot create validator identification.
-15:01:59.018 [main] INFO  io.casperlabs.node.NodeRuntime - Starting node that will bootstrap from casperlabs://de6eed5d00cf080fc587eeb412cb31a75fd10358@52.119.8.109?protocol=40400&discovery=40404
+15:01:59.018 [main] INFO  io.casperlabs.node.NodeRuntime - Starting node that will bootstrap from casperlabs://015e9d8f03dea56a22bb846be50fc6b2280290f5:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@0.0.0.0?protocol=40400&discovery=40404
 15:01:59.182 [main] INFO  io.casperlabs.node.MetricsRuntime - No Influx configuration found
 15:01:59.188 [main] INFO  io.casperlabs.node.MetricsRuntime - Reporting metrics to InfluxDB disabled.
 15:01:59.189 [main] INFO  io.casperlabs.node.MetricsRuntime - Reporting metrics to Prometheus disabled.
@@ -102,12 +102,12 @@ $ docker run -ti casperlabs/node run
 15:01:59.207 [main] INFO  kamon.metrics.SystemMetrics - Starting the Kamon(SystemMetrics) module
 15:01:59.276 [main] INFO  io.casperlabs.node.NodeRuntime - gRPC external server started at 78.144.212.177:40401
 15:01:59.279 [main] INFO  io.casperlabs.node.NodeRuntime - gRPC internal server started at 78.144.212.177:40402
-15:01:59.634 [node-runner-20] INFO  io.casperlabs.node.NodeRuntime - Listening for traffic on casperlabs://44b75da6273cf966cd2e2f608c2061b4b95a926a@78.144.212.177?protocol=40400&discovery=40404.
+15:01:59.634 [node-runner-20] INFO  io.casperlabs.node.NodeRuntime - Listening for traffic on casperlabs://015e9d8f03dea56a22bb846be50fc6b2280290f5:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@0.0.0.0?protocol=40400&discovery=40404.
 ```
 
 ##### 2.1.2.2 Running Node directly from Packages
 
-This will run Node from a package that was built in [Building from source](#building-from-source).  Select the package for your system and install.
+This will run Node from a package that was built in [Building from source](https://github.com/CasperLabs/CasperLabs/tree/dev/node#1-building-from-source). Select the package for your system and install.
 
 ```console
 $ ./node/target/universal/stage/bin/casperlabs-node run -s
@@ -156,13 +156,13 @@ $ ./node/target/universal/stage/bin/casperlabs-node run -s -p 4000 --server-host
 ...
 17:34:22.291 [main] INFO  io.casperlabs.node.NodeRuntime - gRPC external server started at 127.0.0.1:40401
 17:34:22.292 [main] INFO  io.casperlabs.node.NodeRuntime - gRPC internal server started at 127.0.0.1:40402
-17:34:22.542 [main] INFO  io.casperlabs.node.NodeRuntime - Listening for traffic on casperlabs://bc416197520ec34e19a03507f93bbeae15f80a02@127.0.0.1?protocol=4000&discovery=40404.
+17:34:22.542 [main] INFO  io.casperlabs.node.NodeRuntime - Listening for traffic on casperlabs://015e9d8f03dea56a22bb846be50fc6b2280290f5:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@0.0.0.0?protocol=40400&discovery=40404.
 ```
 
 Now bootstrapping the other node just means giving the argument
 
 ```console
---server-bootstrap "casperlabs://bc416197520ec34e19a03507f93bbeae15f80a02@78.144.212.177?protocol=4000&discovery=40404"
+--server-bootstrap "casperlabs://015e9d8f03dea56a22bb846be50fc6b2280290f5:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@0.0.0.0?protocol=40400&discovery=40404"
 ```
 
 For example:
@@ -177,39 +177,39 @@ $ ./node/target/universal/stage/bin/casperlabs-node \
      --server-http-port 40503 \
      --server-kademlia-port 40504 \
      --grpc-port-internal 40502 \
-     --server-bootstrap "casperlabs://bc416197520ec34e19a03507f93bbeae15f80a02@127.0.0.1?protocol=4000&discovery=40404" \
+     --server-bootstrap "casperlabs://015e9d8f03dea56a22bb846be50fc6b2280290f5:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@0.0.0.0?protocol=40400&discovery=40404" \
      --server-host 127.0.0.1 \
      --server-no-upnp
 17:44:12.261 [main] INFO  io.casperlabs.node.Main$ - CasperLabs node (3ec3baf422f0b8055df8d6dc0414664736a392c0)
 17:44:12.268 [main] INFO  io.casperlabs.node.NodeEnvironment$ - Using data dir: /home/aakoshh/.casperlabs-2
 ...
-17:44:12.843 [main] INFO  io.casperlabs.node.NodeRuntime - Starting node that will bootstrap from casperlabs://bc416197520ec34e19a03507f93bbeae15f80a02@127.0.0.1?protocol=4000&discovery=40404
+17:44:12.843 [main] INFO  io.casperlabs.node.NodeRuntime - Starting node that will bootstrap from casperlabs://015e9d8f03dea56a22bb846be50fc6b2280290f5:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@0.0.0.0?protocol=40400&discovery=40404
 ...
 17:44:13.141 [main] INFO  io.casperlabs.node.NodeRuntime - gRPC external server started at 127.0.0.1:40501
 17:44:13.142 [main] INFO  io.casperlabs.node.NodeRuntime - gRPC internal server started at 127.0.0.1:40502
-17:44:13.207 [main] INFO  io.casperlabs.node.NodeRuntime - Listening for traffic on casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8@127.0.0.1?protocol=40500&discovery=40504.
+17:44:13.207 [main] INFO  io.casperlabs.node.NodeRuntime - Listening for traffic on casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@127.0.0.1?protocol=40500&discovery=40504.
 17:44:13.704 [tl-dispatcher-49] INFO  i.c.c.util.comm.CasperPacketHandler$ - Valid ApprovedBlock received!
 17:44:13.734 [tl-dispatcher-49] WARN  i.c.b.InMemBlockDagStorage - Block a5ef46913d95a4ebdc8e0d5c81db33bdec8a6521c8baf498350f24a56aa56ef3 sender is empty
 17:44:13.750 [tl-dispatcher-49] INFO  i.c.c.util.comm.CasperPacketHandler$ - Making a transition to ApprovedBlockRecievedHandler state.
 17:44:13.761 [tl-dispatcher-50] INFO  i.c.casper.util.comm.CommUtil$ - Requested fork tip from peers
 17:44:22.649 [tl-dispatcher-58] INFO  io.casperlabs.comm.rp.Connect$ - Peers: 1.
-17:44:22.650 [tl-dispatcher-58] INFO  i.casperlabs.comm.rp.HandleMessages$ - Responded to protocol handshake request from casperlabs://bc416197520ec34e19a03507f93bbeae15f80a02@127.0.0.1?protocol=4000&discovery=40404
+17:44:22.650 [tl-dispatcher-58] INFO  i.casperlabs.comm.rp.HandleMessages$ - Responded to protocol handshake request from casperlabs://015e9d8f03dea56a22bb846be50fc6b2280290f5:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@0.0.0.0?protocol=40400&discovery=40404
 
 ```
 
 where bootstrapped node should log that it has connected to the new one:
 
 ```console
-17:44:13.442 [tl-dispatcher-45] INFO  i.c.c.util.comm.CasperPacketHandler$ - Received ApprovedBlockRequest from casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8@127.0.0.1?protocol=40500&discovery=40504
-17:44:13.444 [tl-dispatcher-45] INFO  i.c.comm.transport.TcpTransportLayer - stream to List(casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8@127.0.0.1?protocol=40500&discovery=40504) blob
-17:44:13.444 [tl-dispatcher-45] INFO  i.c.c.util.comm.CasperPacketHandler$ - Sending ApprovedBlock to casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8@127.0.0.1?protocol=40500&discovery=40504
-17:44:13.663 [tl-dispatcher-47] INFO  i.c.comm.transport.TcpTransportLayer - Streamed packet /home/aakoshh/.casperlabs/tmp/comm/20190219174413_a43463ed_packet.bts to casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8@127.0.0.1?protocol=40500&discovery=40504
+17:44:13.442 [tl-dispatcher-45] INFO  i.c.c.util.comm.CasperPacketHandler$ - Received ApprovedBlockRequest from casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@127.0.0.1?protocol=40500&discovery=40504
+17:44:13.444 [tl-dispatcher-45] INFO  i.c.comm.transport.TcpTransportLayer - stream to List(casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@127.0.0.1?protocol=40500&discovery=40504) blob
+17:44:13.444 [tl-dispatcher-45] INFO  i.c.c.util.comm.CasperPacketHandler$ - Sending ApprovedBlock to casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@127.0.0.1?protocol=40500&discovery=40504
+17:44:13.663 [tl-dispatcher-47] INFO  i.c.comm.transport.TcpTransportLayer - Streamed packet /home/aakoshh/.casperlabs/tmp/comm/20190219174413_a43463ed_packet.bts to casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@127.0.0.1?protocol=40500&discovery=40504
 17:44:22.667 [loop-36] INFO  io.casperlabs.comm.rp.Connect$ - Peers: 1.
-17:44:22.668 [loop-36] INFO  io.casperlabs.comm.rp.Connect$ - Connected to casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8@127.0.0.1?protocol=40500&discovery=40504.
+17:44:22.668 [loop-36] INFO  io.casperlabs.comm.rp.Connect$ - Connected to casperlabs://abd7498729d1a36f6d4921e3dd83ab1cf10552c8:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@127.0.0.1?protocol=40500&discovery=40504.
 5df2d57}
 ```
 
-Another option to set up local network is to look at the [docker](../docker/README.md) directory:
+Another option to set up local network is to look at the [docker](../hack/docker/README.md) directory:
 
 ```console
 $ make node-0/up
@@ -218,26 +218,24 @@ $ make node-1/up
 ...
 $ docker logs -f node-0
 ...
-16:03:25.576 [main] INFO  io.casperlabs.node.NodeRuntime - Listening for traffic on casperlabs://bc416197520ec34e19a03507f93bbeae15f80a02@node-0?protocol=40400&discovery=40404.
+16:03:25.576 [main] INFO  io.casperlabs.node.NodeRuntime - Listening for traffic on casperlabs://bc416197520ec34e19a03507f93bbeae15f80a02:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@node-0?protocol=40400&discovery=40404.
 16:03:29.770 [node-runner-17] WARN  i.c.b.InMemBlockDagStorage - Block 170f89c15dabf138ecc4f20e9d171416b8a59fcc1e6b30945df69394ff984524 sender is empty
 16:03:29.815 [node-runner-17] INFO  i.c.c.util.comm.CasperPacketHandler$ - Making a transition to ApprovedBlockRecievedHandler state.
 16:03:29.849 [node-runner-46] INFO  i.c.casper.util.comm.CommUtil$ - Requested fork tip from peers
-16:03:53.731 [tl-dispatcher-51] INFO  i.c.c.util.comm.CasperPacketHandler$ - Received ApprovedBlockRequest from casperlabs://a2ddce05242c9b9abfd4af0a303a88eb171748ec@node-1?protocol=40400&discovery=40404
-16:03:53.733 [tl-dispatcher-51] INFO  i.c.comm.transport.TcpTransportLayer - stream to List(casperlabs://a2ddce05242c9b9abfd4af0a303a88eb171748ec@node-1?protocol=40400&discovery=40404) blob
-16:03:53.734 [tl-dispatcher-51] INFO  i.c.c.util.comm.CasperPacketHandler$ - Sending ApprovedBlock to casperlabs://a2ddce05242c9b9abfd4af0a303a88eb171748ec@node-1?protocol=40400&discovery=40404
-16:03:54.037 [tl-dispatcher-53] INFO  i.c.comm.transport.TcpTransportLayer - Streamed packet /root/.casperlabs/tmp/comm/20190219160353_291a78ec_packet.bts to casperlabs://a2ddce05242c9b9abfd4af0a303a88eb171748ec@node-1?protocol=40400&discovery=40404
+16:03:53.731 [tl-dispatcher-51] INFO  i.c.c.util.comm.CasperPacketHandler$ - Received ApprovedBlockRequest from casperlabs://a2ddce05242c9b9abfd4af0a303a88eb171748ec:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@node-1?protocol=40400&discovery=40404
+16:03:53.733 [tl-dispatcher-51] INFO  i.c.comm.transport.TcpTransportLayer - stream to List(casperlabs://a2ddce05242c9b9abfd4af0a303a88eb171748ec:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@node-1?protocol=40400&discovery=40404) blob
+16:03:53.734 [tl-dispatcher-51] INFO  i.c.c.util.comm.CasperPacketHandler$ - Sending ApprovedBlock to casperlabs://a2ddce05242c9b9abfd4af0a303a88eb171748ec:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@node-1?protocol=40400&discovery=40404
+16:03:54.037 [tl-dispatcher-53] INFO  i.c.comm.transport.TcpTransportLayer - Streamed packet /root/.casperlabs/tmp/comm/20190219160353_291a78ec_packet.bts to casperlabs://a2ddce05242c9b9abfd4af0a303a88eb171748ec:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@node-1?protocol=40400&discovery=40404
 16:04:25.750 [loop-42] INFO  io.casperlabs.comm.rp.Connect$ - Peers: 1.
-16:04:25.752 [loop-42] INFO  io.casperlabs.comm.rp.Connect$ - Connected to casperlabs://a2ddce05242c9b9abfd4af0a303a88eb171748ec@node-1?protocol=40400&discovery=40404.
+16:04:25.752 [loop-42] INFO  io.casperlabs.comm.rp.Connect$ - Connected to casperlabs://a2ddce05242c9b9abfd4af0a303a88eb171748ec:9dc600995054eb3abe43dd5a27cf5b4eb7026e8ebd57c229ca95dfd365a51489@node-1?protocol=40400&discovery=40404.
 ```
 
 ### 3.3 Metrics
 
 The current version of the node produces metrics on some communications-related activities in Prometheus format.
 
-To see metrics in action check out the [docker](../docker/README.md) setup. Once you run `make up` you should be able to see Prometheus metrics at http://localhost:9090 and Grafana at http://localhost:3000
+To see metrics in action check out the [docker](../hack/docker/README.md) setup. Once you run `make up` you should be able to see Prometheus metrics at http://localhost:9090 and Grafana at http://localhost:3000
 
 ### 3.4 Caveats
 
 This is very much a work in progress. The networking overlay is only known to work when it can avail itself of visible IP addresses, either public or all contained within the same network. It does not yet include any special code for getting around a home firewall or a closed router, though it does contain some uPNP handling. Any port used must be open or mapped through the router. Depending on your setup, it might be necessary to configure port-forwarding on your router. In some cases, it might even be necessary to specify your router's public IP address as the node address if your router's port-forwarding requires it.
-
-

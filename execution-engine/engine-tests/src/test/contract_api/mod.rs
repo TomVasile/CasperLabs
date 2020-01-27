@@ -1,21 +1,15 @@
-#[cfg(test)]
+mod account;
+mod create_purse;
+mod get_arg;
 mod get_blocktime;
-#[cfg(test)]
 mod get_caller;
-#[cfg(test)]
 mod get_phase;
-#[cfg(test)]
+mod list_named_keys;
 mod local_state;
-#[cfg(test)]
 mod main_purse;
-#[cfg(test)]
+mod mint_purse;
 mod revert;
-#[cfg(test)]
+mod subcall;
 mod transfer;
-#[cfg(test)]
 mod transfer_purse_to_account;
-#[cfg(test)]
 mod transfer_purse_to_purse;
-
-#[cfg(test)]
-pub mod account;

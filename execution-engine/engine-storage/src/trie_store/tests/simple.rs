@@ -1,19 +1,19 @@
 use lmdb::DatabaseFlags;
 use tempfile::tempdir;
 
-use contract_ffi::bytesrepr::{FromBytes, ToBytes};
+use types::bytesrepr::{FromBytes, ToBytes};
 
 use super::TestData;
-use crate::error::{self, in_memory};
-use crate::store::StoreExt;
-use crate::transaction_source::in_memory::InMemoryEnvironment;
-use crate::transaction_source::lmdb::LmdbEnvironment;
-use crate::transaction_source::{Transaction, TransactionSource};
-use crate::trie::Trie;
-use crate::trie_store::in_memory::InMemoryTrieStore;
-use crate::trie_store::lmdb::LmdbTrieStore;
-use crate::trie_store::TrieStore;
-use crate::TEST_MAP_SIZE;
+use crate::{
+    error::{self, in_memory},
+    store::StoreExt,
+    transaction_source::{
+        in_memory::InMemoryEnvironment, lmdb::LmdbEnvironment, Transaction, TransactionSource,
+    },
+    trie::Trie,
+    trie_store::{in_memory::InMemoryTrieStore, lmdb::LmdbTrieStore, TrieStore},
+    TEST_MAP_SIZE,
+};
 
 fn put_succeeds<'a, K, V, S, X, E>(
     store: &S,
@@ -260,7 +260,7 @@ where
     S: TrieStore<Vec<u8>, Vec<u8>>,
     X: TransactionSource<'a, Handle = S::Handle>,
     S::Error: From<X::Error>,
-    E: From<S::Error> + From<X::Error> + From<contract_ffi::bytesrepr::Error>,
+    E: From<S::Error> + From<X::Error> + From<types::bytesrepr::Error>,
 {
     let TestData(leaf_1_hash, leaf_1) = &super::create_data()[0..1][0];
 
@@ -312,7 +312,7 @@ where
     S: TrieStore<Vec<u8>, Vec<u8>>,
     X: TransactionSource<'a, Handle = S::Handle>,
     S::Error: From<X::Error>,
-    E: From<S::Error> + From<X::Error> + From<contract_ffi::bytesrepr::Error>,
+    E: From<S::Error> + From<X::Error> + From<types::bytesrepr::Error>,
 {
     let data = super::create_data();
     let TestData(ref leaf_1_hash, ref leaf_1) = data[0];
@@ -368,7 +368,7 @@ where
     S: TrieStore<Vec<u8>, Vec<u8>>,
     X: TransactionSource<'a, Handle = S::Handle>,
     S::Error: From<X::Error>,
-    E: From<S::Error> + From<X::Error> + From<contract_ffi::bytesrepr::Error>,
+    E: From<S::Error> + From<X::Error> + From<types::bytesrepr::Error>,
 {
     let data = super::create_data();
     let TestData(ref leaf_1_hash, ref leaf_1) = data[0];
@@ -435,7 +435,7 @@ where
     S: TrieStore<Vec<u8>, Vec<u8>>,
     X: TransactionSource<'a, Handle = S::Handle>,
     S::Error: From<X::Error>,
-    E: From<S::Error> + From<X::Error> + From<contract_ffi::bytesrepr::Error>,
+    E: From<S::Error> + From<X::Error> + From<types::bytesrepr::Error>,
 {
     let data = super::create_data();
     let TestData(ref leaf_1_hash, ref leaf_1) = data[0];
@@ -498,7 +498,7 @@ where
     S: TrieStore<Vec<u8>, Vec<u8>>,
     X: TransactionSource<'a, Handle = S::Handle>,
     S::Error: From<X::Error>,
-    E: From<S::Error> + From<X::Error> + From<contract_ffi::bytesrepr::Error>,
+    E: From<S::Error> + From<X::Error> + From<types::bytesrepr::Error>,
 {
     let data = super::create_data();
     let TestData(ref leaf_1_hash, ref leaf_1) = data[0];

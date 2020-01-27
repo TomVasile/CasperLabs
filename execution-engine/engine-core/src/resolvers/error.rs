@@ -1,5 +1,7 @@
+use types::ProtocolVersion;
+
 #[derive(Debug)]
 pub enum ResolverError {
-    UnknownProtocolVersion(u64),
+    UnknownProtocolVersion(ProtocolVersion),
     NoImportedMemory,
 }

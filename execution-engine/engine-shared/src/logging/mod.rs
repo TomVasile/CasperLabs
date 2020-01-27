@@ -1,11 +1,17 @@
-use std::collections::btree_map::BTreeMap;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
-use crate::logging::log_level::LogLevel;
-use crate::logging::log_message::{LogMessage, MessageId};
-use crate::logging::logger::initialize_terminal_logger;
-use crate::newtypes::CorrelationId;
-use crate::utils::jsonify;
+use crate::{
+    logging::{
+        log_level::LogLevel,
+        log_message::{LogMessage, MessageId},
+        logger::initialize_terminal_logger,
+    },
+    newtypes::CorrelationId,
+    utils::jsonify,
+};
 
 pub mod log_level;
 pub mod log_message;
@@ -67,12 +73,8 @@ pub fn log_details(
         return None;
     }
 
-    let log_message = LogMessage::new_props(
-        log_settings_provider,
-        log_level,
-        message_format.to_owned(),
-        properties.to_owned(),
-    );
+    let log_message =
+        LogMessage::new_props(log_settings_provider, log_level, message_format, properties);
 
     let json = jsonify(&log_message, false);
 

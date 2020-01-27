@@ -1,12 +1,9 @@
-use std::collections::HashMap;
-
-use crate::support::test_support::{WasmTestBuilder, DEFAULT_BLOCK_TIME};
-use contract_ffi::key::Key;
-use contract_ffi::uref::URef;
-use contract_ffi::value::Value;
 use engine_shared::transform::Transform;
-
-const GENESIS_ADDR: [u8; 32] = [6u8; 32];
+use engine_test_support::low_level::{
+    DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR,
+    DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT, STANDARD_PAYMENT_CONTRACT,
+};
+use types::{account::PublicKey, Key, URef};
 
 fn get_uref(key: Key) -> URef {
     match key {
@@ -18,34 +15,36 @@ fn get_uref(key: Key) -> URef {
 fn do_pass(pass: &str) -> (URef, URef) {
     // This test runs a contract that's after every call extends the same key with
     // more data
-    let transforms = WasmTestBuilder::default()
-        .run_genesis(GENESIS_ADDR, HashMap::new())
-        .exec_with_args(
-            GENESIS_ADDR,
-            "ee_441_rng_state.wasm",
-            DEFAULT_BLOCK_TIME,
-            1,
-            (pass.to_string(),),
-        )
+    let exec_request = {
+        let deploy = DeployItemBuilder::new()
+            .with_address(DEFAULT_ACCOUNT_ADDR)
+            .with_payment_code(STANDARD_PAYMENT_CONTRACT, (*DEFAULT_PAYMENT,))
+            .with_session_code("ee_441_rng_state.wasm", (pass.to_string(),))
+            .with_deploy_hash([1u8; 32])
+            .with_authorization_keys(&[PublicKey::new(DEFAULT_ACCOUNT_ADDR)])
+            .build();
+        ExecuteRequestBuilder::from_deploy_item(deploy).build()
+    };
+
+    let transforms = InMemoryWasmTestBuilder::default()
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request)
         .expect_success()
         .commit()
         .get_transforms();
 
     let transform = &transforms[0];
-    let account_transform = &transform[&Key::Account(GENESIS_ADDR)];
-    let account = if let Transform::Write(Value::Account(account)) = account_transform {
-        account
+    let account_transform = &transform[&Key::Account(DEFAULT_ACCOUNT_ADDR)];
+    let keys = if let Transform::AddKeys(keys) = account_transform {
+        keys
     } else {
         panic!(
-            "Transform for account is expected to be of type Write(Account) but got {:?}",
+            "Transform for account is expected to be of type AddKeys(keys) but got {:?}",
             account_transform
         );
     };
 
-    (
-        get_uref(account.urefs_lookup()["uref1"]),
-        get_uref(account.urefs_lookup()["uref2"]),
-    )
+    (get_uref(keys["uref1"]), get_uref(keys["uref2"]))
 }
 
 #[ignore]

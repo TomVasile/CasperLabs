@@ -6,22 +6,21 @@ import java.util.concurrent.TimeUnit
 import cats.data.Validated.Valid
 import cats.syntax.option._
 import cats.syntax.show._
-import eu.timepit.refined._
+import com.google.protobuf.ByteString
 import eu.timepit.refined.auto._
-import eu.timepit.refined.numeric._
-import io.casperlabs.blockstorage.{FileDagStorage, LMDBBlockStorage}
 import io.casperlabs.casper.CasperConf
 import io.casperlabs.comm.discovery.NodeUtils._
 import io.casperlabs.comm.discovery.{Node, NodeIdentifier}
 import io.casperlabs.comm.transport.Tls
 import io.casperlabs.configuration.ignore
+import io.casperlabs.crypto.codec.Base16
 import io.casperlabs.node.configuration.Utils._
+import org.scalacheck.Shrink
 import org.scalacheck.ScalacheckShapeless._
 import org.scalatest._
 import org.scalatest.prop.GeneratorDrivenPropertyChecks
-import org.scalacheck.{Gen, Shrink}
+
 import scala.concurrent.duration._
-import scala.io.Source
 
 class ConfigurationSpec
     extends FunSuite
@@ -37,7 +36,7 @@ class ConfigurationSpec
 
   implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
     PropertyCheckConfiguration(
-      minSuccessful = 500,
+      minSuccessful = 100,
       workers = 1
     )
 
@@ -51,21 +50,37 @@ class ConfigurationSpec
       dynamicHostAddress = false,
       noUpnp = false,
       defaultTimeout = FiniteDuration(1, TimeUnit.SECONDS),
-      bootstrap = Node(
-        NodeIdentifier("de6eed5d00cf080fc587eeb412cb31a75fd10358"),
-        "52.119.8.109",
-        1,
-        1
-      ).some,
+      bootstrap = List(
+        NodeWithoutChainId(
+          Node(
+            NodeIdentifier("de6eed5d00cf080fc587eeb412cb31a75fd10358"),
+            "52.119.8.109",
+            1,
+            1,
+            ByteString.EMPTY
+          )
+        ),
+        NodeWithoutChainId(
+          Node(
+            NodeIdentifier("de6eed5d00cf080fc587eeb412cb31a75fd10358"),
+            "127.0.0.1",
+            1,
+            1,
+            ByteString.EMPTY
+          )
+        )
+      ),
       dataDir = Paths.get("/tmp"),
       maxNumOfConnections = 1,
       maxMessageSize = 1,
+      eventStreamBufferSize = 1,
+      engineParallelism = 1,
       chunkSize = 1,
-      useGossiping = true,
       relayFactor = 1,
       relaySaturation = 1,
       approvalRelayFactor = 1,
       approvalPollInterval = FiniteDuration(1, TimeUnit.SECONDS),
+      alivePeersCacheExpirationPeriod = FiniteDuration(1, TimeUnit.SECONDS),
       syncMaxPossibleDepth = 1,
       syncMinBlockCountToCheckWidth = 1,
       syncMaxBondingRate = 1.0,
@@ -74,15 +89,20 @@ class ConfigurationSpec
       initSyncMinSuccessful = 1,
       initSyncMemoizeNodes = false,
       initSyncSkipFailedNodes = false,
+      initSyncStep = 1,
       initSyncRoundPeriod = FiniteDuration(1, TimeUnit.SECONDS),
       initSyncMaxBlockCount = 1,
+      periodicSyncRoundPeriod = FiniteDuration(1, TimeUnit.SECONDS),
       downloadMaxParallelBlocks = 1,
       downloadMaxRetries = 1,
       downloadRetryInitialBackoffPeriod = FiniteDuration(1, TimeUnit.SECONDS),
       downloadRetryBackoffFactor = 1.0,
       relayMaxParallelBlocks = 1,
       relayBlockChunkConsumerTimeout = FiniteDuration(1, TimeUnit.SECONDS),
-      cleanBlockStorage = false
+      cleanBlockStorage = false,
+      blockUploadRateMaxRequests = 0,
+      blockUploadRatePeriod = Duration.Zero,
+      blockUploadRateMaxThrottled = 0
     )
     val grpcServer = Configuration.Grpc(
       socket = Paths.get("/tmp/test"),
@@ -96,45 +116,29 @@ class ConfigurationSpec
       validatorPrivateKey = "test".some,
       validatorPrivateKeyPath = Paths.get("/tmp/test").some,
       validatorSigAlgorithm = "test",
-      bondsFile = Paths.get("/tmp/test"),
       knownValidatorsFile = Paths.get("/tmp/test").some,
-      numValidators = 1,
-      walletsFile = Paths.get("/tmp/test"),
-      minimumBond = 1L,
-      maximumBond = 1L,
       requiredSigs = 1,
-      genesisAccountPublicKeyPath = Paths.get("/tmp/test").some,
-      initialMotes = BigInt(1),
-      mintCodePath = Paths.get("/tmp/test").some,
-      posCodePath = Paths.get("/tmp/test").some,
-      shardId = "test",
+      chainSpecPath = Paths.get("/tmp/test").some,
       standalone = false,
-      approveGenesis = false,
-      approveGenesisInterval = FiniteDuration(1, TimeUnit.SECONDS),
-      approveGenesisDuration = FiniteDuration(1, TimeUnit.SECONDS),
-      deployTimestamp = 1L.some,
-      genesisPath = Paths.get("/tmp/genesis"),
       autoProposeEnabled = false,
       autoProposeCheckInterval = FiniteDuration(1, TimeUnit.SECONDS),
-      autoProposeMaxInterval = FiniteDuration(1, TimeUnit.SECONDS),
-      autoProposeMaxCount = 1,
-      maxBlockSizeBytes = 1
+      autoProposeBallotInterval = FiniteDuration(1, TimeUnit.SECONDS),
+      autoProposeAccInterval = FiniteDuration(1, TimeUnit.SECONDS),
+      autoProposeAccCount = 1,
+      maxBlockSizeBytes = 1,
+      minTtl = FiniteDuration(1, TimeUnit.HOURS)
     )
     val tls = Tls(
-      certificate = Paths.get("/tmp/test"),
-      key = Paths.get("/tmp/test"),
-      secureRandomNonBlocking = false
-    )
-    val lmdb = LMDBBlockStorage.Config(
-      dir = Paths.get("/tmp/lmdb-block-storage"),
-      blockStorageSize = 1L,
-      maxDbs = 1,
-      maxReaders = 1,
-      useTls = false
+      certificate = Paths.get("/tmp/test.crt"),
+      key = Paths.get("/tmp/test.key"),
+      apiCertificate = Paths.get("/tmp/test.api.crt"),
+      apiKey = Paths.get("/tmp/test.api.key")
     )
     val blockStorage = Configuration.BlockStorage(
-      latestMessagesLogMaxSizeFactor = 1,
-      cacheMaxSizeBytes = 1
+      cacheMaxSizeBytes = 1,
+      cacheNeighborhoodBefore = 1,
+      cacheNeighborhoodAfter = 1,
+      deployStreamChunkSize = 1
     )
     val kamonSettings = Configuration.Kamon(
       prometheus = false,
@@ -150,60 +154,21 @@ class ConfigurationSpec
       "user".some,
       "password".some
     )
+    val log = Configuration.Log(
+      level = izumi.logstage.api.Log.Level.Info,
+      jsonPath = Paths.get("/tmp/json.log").some
+    )
 
     Configuration(
+      log,
       server,
       grpcServer,
       tls,
       casper,
-      lmdb,
       blockStorage,
       kamonSettings,
       influx.some
     )
-  }
-
-  test("""
-        |Configuration.updateTls should update
-        |'customCertificateLocation' and 'customKeyLocation'
-        |if certificate and key are custom""".stripMargin) {
-    forAll { (maybeDataDir: Option[Path], maybeCert: Option[Path], maybeKey: Option[Path]) =>
-      import shapeless._
-
-      /*_*/
-      val confUpdatedDataDir =
-        maybeDataDir.fold(defaultConf)(lens[Configuration].server.dataDir.set(defaultConf))
-      val confUpdatedCert =
-        maybeCert.fold(confUpdatedDataDir)(
-          lens[Configuration].tls.certificate.set(confUpdatedDataDir)
-        )
-      val confUpdatedKey =
-        maybeKey.fold(confUpdatedCert)(lens[Configuration].tls.key.set(confUpdatedCert))
-      /*_*/
-
-      val Right(defaults) = readFile(Source.fromResource("default-configuration.toml")) map Configuration.parseToml
-      val Right(res) = Configuration
-        .updateTls(Configuration.updatePaths(confUpdatedKey, defaultConf.server.dataDir), defaults)
-      val Right(defaultCert) =
-        Parser[java.nio.file.Path].parse(defaults(CamelCase("tlsCertificate")))
-      val Right(defaultKey) = Parser[java.nio.file.Path].parse(defaults(CamelCase("tlsKey")))
-
-      maybeCert match {
-        case Some(c) =>
-          val certStrippedPath        = stripPrefix(c, res.server.dataDir)
-          val defaultCertStrippedPath = stripPrefix(defaultCert, defaultConf.server.dataDir)
-          assert(res.tls.customCertificateLocation && certStrippedPath != defaultCertStrippedPath)
-        case None =>
-          assert(!res.tls.customCertificateLocation)
-      }
-      maybeKey match {
-        case Some(k) =>
-          val keyStrippedPath        = stripPrefix(k, res.server.dataDir)
-          val defaultKeyStrippedPath = stripPrefix(defaultKey, defaultConf.server.dataDir)
-          assert(res.tls.customKeyLocation && keyStrippedPath != defaultKeyStrippedPath)
-        case None => assert(!res.tls.customKeyLocation)
-      }
-    }
   }
 
   test("""
@@ -300,7 +265,6 @@ class ConfigurationSpec
         expected.grpc shouldEqual result.grpc
         expected.tls shouldEqual result.tls
         expected.casper shouldEqual result.casper
-        expected.lmdb shouldEqual result.lmdb
         expected.blockstorage shouldEqual result.blockstorage
         expected.metrics shouldEqual result.metrics
     }
@@ -363,6 +327,10 @@ class ConfigurationSpec
             case (None, None)       => None
           }
       implicit def optionPlain[A: NotSubConfig: NotOption]: Merge[Option[A]] = _ orElse _
+      implicit def listMerge[A]: Merge[List[A]] = {
+        case (Nil, b) => b
+        case (a, _)   => a
+      }
     }
 
     Merge.gen[Configuration].merge(a, b)
@@ -377,16 +345,19 @@ class ConfigurationSpec
     val tables = reduce(conf, Map.empty[String, Map[String, String]]) {
       case s: String             => s""""$s""""
       case d: FiniteDuration     => s""""${d.toString.replace(" ", "")}""""
-      case p: Node               => s""""${p.show}""""
+      case p: NodeWithoutChainId => s""""${p.show}""""
       case p: java.nio.file.Path => s""""${p.toString}""""
       case x                     => x.toString
-    } { (acc, fullFieldName, field) =>
-      val tableName :: fieldName = fullFieldName
-      val table                  = dashify(tableName)
-      val key                    = dashify(fieldName.mkString("-"))
-      val previousTable          = acc.getOrElse(table, Map.empty[String, String])
-      val updatedKeys            = previousTable + (key -> field)
-      acc.updated(table, updatedKeys)
+    } {
+      case (acc, _, "") =>
+        acc
+      case (acc, fullFieldName, field) =>
+        val tableName :: fieldName = fullFieldName
+        val table                  = dashify(tableName)
+        val key                    = dashify(fieldName.mkString("-"))
+        val previousTable          = acc.getOrElse(table, Map.empty[String, String])
+        val updatedKeys            = previousTable + (key -> field)
+        acc.updated(table, updatedKeys)
     }
 
     val sb = new StringBuilder
@@ -410,22 +381,23 @@ class ConfigurationSpec
           v match {
             case "true"  => Some(s"$key")
             case "false" => None
+            case ""      => None
             case _       => Some(s"$key=$v")
           }
       }
       .toList
 
   def toEnvVars(conf: Configuration): Map[String, String] = {
-    val mapper = (_: String).replace(" ", "") match {
-      case x @ ("InMem" | "Mixed" | "LMDB") => x.toLowerCase
-      case x                                => x
-    }
+    val mapper = (_: String).replace(" ", "")
 
     reduce(conf, Map.empty[String, String])({
-      case n: Node => mapper(n.show)
-      case x       => mapper(x.toString)
-    }) { (envVars, fieldName, field) =>
-      envVars + (snakify(("CL" :: fieldName).mkString("_")) -> field)
+      case n: NodeWithoutChainId => mapper(n.show)
+      case x                     => mapper(x.toString)
+    }) {
+      case (envVars, _, "") =>
+        envVars
+      case (envVars, fieldName, field) =>
+        envVars + (snakify(("CL" :: fieldName).mkString("_")) -> field)
     }
   }
 
@@ -456,12 +428,18 @@ class ConfigurationSpec
       def dispatch[T](sealedTrait: SealedTrait[Typeclass, T]): Typeclass[T] = ???
       implicit def gen[T]: Typeclass[T] = macro Magnolia.gen[T]
 
-      implicit val peerNode: Flattener[Node] =
+      implicit val peerNode: Flattener[NodeWithoutChainId] =
         (path, a) => List((path, innerFieldsMapper(a)))
+
+      implicit val peerNodes: Flattener[List[NodeWithoutChainId]] =
+        (path, xs) => List((path, xs.map(innerFieldsMapper).mkString(" ")))
+
       implicit def default[A: NotSubConfig]: Flattener[A] =
         (path, a) => List((path, innerFieldsMapper(a)))
+
       implicit def optionSubConfig[A: IsSubConfig](implicit F: Flattener[A]): Flattener[Option[A]] =
         (path, opt) => opt.toList.flatMap(subconfig => F.flatten(path, subconfig))
+
       implicit def optionPlain[A: NotSubConfig]: Flattener[Option[A]] =
         (path, opt) => opt.toList.map(a => (path, innerFieldsMapper(a)))
     }

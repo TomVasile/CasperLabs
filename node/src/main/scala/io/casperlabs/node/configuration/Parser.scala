@@ -3,8 +3,9 @@ package io.casperlabs.node.configuration
 import java.nio.file.{Path, Paths}
 
 import scala.util.Try
-import cats.syntax.either._
-import io.casperlabs.comm.CommError
+import cats._
+import cats.implicits._
+import cats.syntax._
 import io.casperlabs.comm.discovery.Node
 import io.casperlabs.comm.discovery.NodeUtils._
 import eu.timepit.refined._
@@ -12,6 +13,7 @@ import eu.timepit.refined.numeric._
 import eu.timepit.refined.api.Refined
 import scala.concurrent.duration.Duration.Infinite
 import scala.concurrent.duration._
+import izumi.logstage.api.{Log => IzLog}
 
 private[configuration] trait Parser[A] {
   def parse(s: String): Either[String, A]
@@ -40,8 +42,24 @@ private[configuration] trait ParserImplicits {
   implicit val pathParser: Parser[Path] = s =>
     Try(Paths.get(s.replace("$HOME", sys.props("user.home")))).toEither
       .leftMap(_.getMessage)
-  implicit val peerNodeParser: Parser[Node] = s =>
-    Node.fromAddress(s).leftMap(CommError.errorMessage)
+
+  implicit val peerNodeParser: Parser[NodeWithoutChainId] = s => {
+    Node.fromAddress(s)
+  }
+
+  implicit val protocolVersionParser: Parser[ChainSpec.ProtocolVersion] = {
+    // Major and minor mandatory, patch optional.
+    val SemVer = """(\d+)\.(\d+)(?:\.(\d+))?""".r
+    s =>
+      s match {
+        case SemVer(major, minor, patch) =>
+          ChainSpec
+            .ProtocolVersion(major.toInt, minor.toInt, Option(patch).fold(0)(_.toInt))
+            .asRight
+        case _ =>
+          s"Unable to parse semver: $s".asLeft
+      }
+  }
 
   implicit val positiveIntParser: Parser[Refined[Int, Positive]] =
     s =>
@@ -70,6 +88,16 @@ private[configuration] trait ParserImplicits {
         d <- Try(s.toDouble).toEither.leftMap(_.getMessage)
         w <- refineV[GreaterEqual[W.`0.0`.T]](d)
       } yield w
+
+  implicit def listParser[T: Parser] = new Parser[List[T]] {
+    override def parse(s: String) =
+      s.split(' ').filterNot(_.isEmpty).map(Parser[T].parse).toList.sequence
+  }
+
+  implicit val logLevelParser = new Parser[IzLog.Level] {
+    override def parse(s: String) =
+      Try(IzLog.Level.parse(s)).toEither.leftMap(_.getMessage)
+  }
 }
 
 private[configuration] object Parser {

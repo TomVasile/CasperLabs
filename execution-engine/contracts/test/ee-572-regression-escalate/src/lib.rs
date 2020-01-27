@@ -1,36 +1,36 @@
 #![no_std]
-#![feature(cell_update)]
 
-extern crate alloc;
-extern crate contract_ffi;
-
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
-use contract_ffi::contract_api;
-use contract_ffi::contract_api::pointers::{ContractPointer, UPointer};
-use contract_ffi::key::Key;
-use contract_ffi::uref::{AccessRights, URef};
+use contract::{
+    contract_api::{runtime, storage, TURef},
+    unwrap_or_revert::UnwrapOrRevert,
+};
+use types::{AccessRights, ApiError, Key, URef};
 
 const CONTRACT_POINTER: u32 = 0;
 
-const GET_ARG_ERROR: u32 = 100;
-const CREATE_UPOINTER_ERROR: u32 = 200;
+#[repr(u16)]
+enum Error {
+    GetArgument = 0,
+}
 
 const REPLACEMENT_DATA: &str = "bawitdaba";
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let contract_pointer: ContractPointer = contract_api::get_arg::<Key>(CONTRACT_POINTER)
-        .to_c_ptr()
-        .unwrap_or_else(|| contract_api::revert(GET_ARG_ERROR));
+    let arg: Key = runtime::get_arg(CONTRACT_POINTER)
+        .unwrap_or_revert_with(ApiError::MissingArgument)
+        .unwrap_or_revert_with(ApiError::InvalidArgument);
 
-    let reference: URef = contract_api::call_contract(contract_pointer, &(), &Vec::new());
+    let contract_pointer = arg
+        .to_contract_ref()
+        .unwrap_or_revert_with(ApiError::User(Error::GetArgument as u16));
 
-    let forged_reference: UPointer<String> = {
+    let reference: URef = runtime::call_contract(contract_pointer, ());
+
+    let forged_reference: TURef<&str> = {
         let ret = URef::new(reference.addr(), AccessRights::READ_ADD_WRITE);
-        UPointer::from_uref(ret).unwrap_or_else(|_| contract_api::revert(CREATE_UPOINTER_ERROR))
+        TURef::from_uref(ret).unwrap_or_revert()
     };
 
-    contract_api::write(forged_reference, REPLACEMENT_DATA.to_string())
+    storage::write(forged_reference, &REPLACEMENT_DATA)
 }

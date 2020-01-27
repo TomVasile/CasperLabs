@@ -54,7 +54,7 @@ services:
     build:
       context: ./
       dockerfile: ./grpcwebproxy/Dockerfile
-    image: casperlabs/grpcwebproxy
+    image: casperlabs/grpcwebproxy:${CL_VERSION}
     container_name: grpcwebproxy
     ports:
       # This is just exposed for debug purposes. Access it through Nginx reverse proxy instead.
@@ -65,9 +65,11 @@ services:
     command:
       - /grpcwebproxy
       - --backend_addr=node-0:40401
-      - --backend_tls=true
+      - --backend_tls=false
       - --backend_tls_noverify
       - --backend_max_call_recv_msg_size=16777216
+      # Timeout for server-side streaming
+      - --server_http_max_write_timeout=1h
       - --allow_all_origins
       - --server_tls_cert_file=/etc/tls/certificate.pem
       - --server_tls_key_file=/etc/tls/key.pem
@@ -77,20 +79,19 @@ services:
   # CasperLabs Explorer available at https://localhost:8443
   # The URL needs to be enabled in Auth0 for login/logout to work.
   explorer:
-    image: casperlabs/explorer:latest
+    image: casperlabs/explorer:${CL_VERSION}
     container_name: explorer
     networks:
       - casperlabs
     # Ports are not exposed, access it through nginx instead.
     volumes:
-      # NOTE: This is using the system account, so no need for giving funds to the faucet.
-      - ${PWD}/.casperlabs/genesis/system-account/account-public.pem:/app/keys/public.key
-      - ${PWD}/.casperlabs/genesis/system-account/account-private.pem:/app/keys/private.key
-      - ${PWD}/.casperlabs/explorer/nonce.txt:/app/nonce.txt
+      # NOTE: This is using the faucet account already, so no need for giving funds to any account explicitly..
+      - ${PWD}/keys/faucet-account/account-public.pem:/app/keys/public.key
+      - ${PWD}/keys/faucet-account/account-private.pem:/app/keys/private.key
     environment:
       FAUCET_ACCOUNT_PUBLIC_KEY_PATH: /app/keys/public.key
       FAUCET_ACCOUNT_PRIVATE_KEY_PATH: /app/keys/private.key
-      FAUCET_NONCE_PATH: /app/nonce.txt
+      PAYMENT_AMOUNT: 10000000
       CASPER_SERVICE_URL: http://grpcwebproxy:8080
       SERVER_PORT: 8080
       # Not using TLS, Nginx does it.

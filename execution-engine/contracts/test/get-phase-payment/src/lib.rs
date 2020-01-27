@@ -1,51 +1,29 @@
 #![no_std]
 
-#[macro_use]
-extern crate alloc;
-extern crate contract_ffi;
+use contract::{
+    contract_api::{account, runtime, system},
+    unwrap_or_revert::UnwrapOrRevert,
+};
+use types::{account::PurseId, ApiError, Phase, U512};
 
-use contract_ffi::contract_api::pointers::UPointer;
-use contract_ffi::contract_api::{self, PurseTransferResult};
-use contract_ffi::execution::Phase;
-use contract_ffi::key::Key;
-use contract_ffi::value::account::PurseId;
-use contract_ffi::value::U512;
-
-const POS_CONTRACT_NAME: &str = "pos";
 const GET_PAYMENT_PURSE: &str = "get_payment_purse";
 
-#[repr(u32)]
-enum Error {
-    GetPosOuterURef = 1,
-    GetPosInnerURef = 2,
-    TransferFromSourceToPayment = 3,
-}
-
 fn standard_payment(amount: U512) {
-    let main_purse = contract_api::main_purse();
+    let main_purse = account::get_main_purse();
 
-    let pos_public: UPointer<Key> = contract_api::get_uref(POS_CONTRACT_NAME)
-        .and_then(Key::to_u_ptr)
-        .unwrap_or_else(|| contract_api::revert(Error::GetPosOuterURef as u32));
+    let pos_pointer = system::get_proof_of_stake();
 
-    let pos_contract = contract_api::read(pos_public)
-        .to_c_ptr()
-        .unwrap_or_else(|| contract_api::revert(Error::GetPosInnerURef as u32));
+    let payment_purse: PurseId = runtime::call_contract(pos_pointer, (GET_PAYMENT_PURSE,));
 
-    let payment_purse: PurseId =
-        contract_api::call_contract(pos_contract, &(GET_PAYMENT_PURSE,), &vec![]);
-
-    if let PurseTransferResult::TransferError =
-        contract_api::transfer_from_purse_to_purse(main_purse, payment_purse, amount)
-    {
-        contract_api::revert(Error::TransferFromSourceToPayment as u32);
-    }
+    system::transfer_from_purse_to_purse(main_purse, payment_purse, amount).unwrap_or_revert()
 }
 
 #[no_mangle]
 pub extern "C" fn call() {
-    let known_phase: Phase = contract_api::get_arg(0);
-    let get_phase = contract_api::get_phase();
+    let known_phase: Phase = runtime::get_arg(0)
+        .unwrap_or_revert_with(ApiError::MissingArgument)
+        .unwrap_or_revert_with(ApiError::InvalidArgument);
+    let get_phase = runtime::get_phase();
     assert_eq!(
         get_phase, known_phase,
         "get_phase did not return known_phase"

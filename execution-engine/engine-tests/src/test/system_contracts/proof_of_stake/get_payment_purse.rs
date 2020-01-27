@@ -1,21 +1,26 @@
-use std::collections::HashMap;
+use engine_test_support::low_level::{
+    ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG,
+    DEFAULT_PAYMENT,
+};
+use types::U512;
 
-use crate::support::test_support::{WasmTestBuilder, DEFAULT_BLOCK_TIME};
-
-const GENESIS_ADDR: [u8; 32] = [6u8; 32];
+const CONTRACT_POS_GET_PAYMENT_PURSE: &str = "pos_get_payment_purse.wasm";
+const CONTRACT_TRANSFER_PURSE_TO_ACCOUNT: &str = "transfer_purse_to_account.wasm";
 const ACCOUNT_1_ADDR: [u8; 32] = [1u8; 32];
+const ACCOUNT_1_INITIAL_BALANCE: u64 = 100_000_000 + 100;
 
 #[ignore]
 #[test]
-fn should_run_get_payment_purse_contract_genesis_account() {
-    WasmTestBuilder::default()
-        .run_genesis(GENESIS_ADDR, HashMap::new())
-        .exec(
-            GENESIS_ADDR,
-            "pos_get_payment_purse.wasm",
-            DEFAULT_BLOCK_TIME,
-            1,
-        )
+fn should_run_get_payment_purse_contract_default_account() {
+    let exec_request = ExecuteRequestBuilder::standard(
+        DEFAULT_ACCOUNT_ADDR,
+        CONTRACT_POS_GET_PAYMENT_PURSE,
+        (*DEFAULT_PAYMENT,),
+    )
+    .build();
+    InMemoryWasmTestBuilder::default()
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request)
         .expect_success()
         .commit();
 }
@@ -23,23 +28,24 @@ fn should_run_get_payment_purse_contract_genesis_account() {
 #[ignore]
 #[test]
 fn should_run_get_payment_purse_contract_account_1() {
-    WasmTestBuilder::default()
-        .run_genesis(GENESIS_ADDR, HashMap::new())
-        .exec_with_args(
-            GENESIS_ADDR,
-            "transfer_to_account_01.wasm",
-            DEFAULT_BLOCK_TIME,
-            1,
-            (ACCOUNT_1_ADDR,),
-        )
+    let exec_request_1 = ExecuteRequestBuilder::standard(
+        DEFAULT_ACCOUNT_ADDR,
+        CONTRACT_TRANSFER_PURSE_TO_ACCOUNT,
+        (ACCOUNT_1_ADDR, U512::from(ACCOUNT_1_INITIAL_BALANCE)),
+    )
+    .build();
+    let exec_request_2 = ExecuteRequestBuilder::standard(
+        ACCOUNT_1_ADDR,
+        CONTRACT_POS_GET_PAYMENT_PURSE,
+        (*DEFAULT_PAYMENT,),
+    )
+    .build();
+    InMemoryWasmTestBuilder::default()
+        .run_genesis(&DEFAULT_GENESIS_CONFIG)
+        .exec(exec_request_1)
         .expect_success()
         .commit()
-        .exec(
-            ACCOUNT_1_ADDR,
-            "pos_get_payment_purse.wasm",
-            DEFAULT_BLOCK_TIME,
-            1,
-        )
+        .exec(exec_request_2)
         .expect_success()
         .commit();
 }

@@ -1,0 +1,5 @@
+[upgrade]
+
+activation-point-rank = 30
+
+protocol-version = "1.1.0"

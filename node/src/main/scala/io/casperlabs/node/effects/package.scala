@@ -6,57 +6,50 @@ import cats._
 import cats.effect._
 import cats.implicits._
 import cats.mtl._
-import doobie.free.connection
 import doobie.hikari.HikariTransactor
 import doobie.implicits._
 import doobie.util.transactor.Transactor
-import io.casperlabs.comm.CachedConnections.ConnectionsCache
 import io.casperlabs.comm._
 import io.casperlabs.comm.discovery._
 import io.casperlabs.comm.rp.Connect._
 import io.casperlabs.comm.rp._
-import io.casperlabs.comm.transport._
 import io.casperlabs.metrics.Metrics
 import io.casperlabs.shared._
 import monix.eval._
 import monix.execution._
-
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
-import scala.io.Source
 
 package object effects {
   import com.zaxxer.hikari.HikariConfig
-
-  def log: Log[Task] = Log.log
 
   def nodeDiscovery(
       id: NodeIdentifier,
       port: Int,
       timeout: FiniteDuration,
-      gossipingEnabled: Boolean,
+      alivePeersCacheExpirationPeriod: FiniteDuration,
       gossipingRelayFactor: Int,
       gossipingRelaySaturation: Int,
       ingressScheduler: Scheduler,
       egressScheduler: Scheduler
-  )(init: Option[Node])(
+  )(
       implicit
       peerNodeAsk: NodeAsk[Task],
+      bootstrapsAsk: BootstrapsAsk[Task],
       log: Log[Task],
       metrics: Metrics[Task]
-  ): Resource[Effect, NodeDiscovery[Task]] =
+  ): Resource[Task, NodeDiscovery[Task]] =
     NodeDiscoveryImpl
       .create[Task](
         id,
         port,
         timeout,
-        gossipingEnabled,
         gossipingRelayFactor,
         gossipingRelaySaturation,
         ingressScheduler,
-        egressScheduler
-      )(init)
-      .toEffect
+        egressScheduler,
+        alivePeersCacheExpirationPeriod = alivePeersCacheExpirationPeriod
+      )
 
   def time(implicit timer: Timer[Task]): Time[Task] =
     new Time[Task] {
@@ -64,24 +57,6 @@ package object effects {
       def nanoTime: Task[Long]                        = timer.clock.monotonic(NANOSECONDS)
       def sleep(duration: FiniteDuration): Task[Unit] = timer.sleep(duration)
     }
-
-  def tcpTransportLayer(
-      port: Int,
-      certPath: Path,
-      keyPath: Path,
-      maxMessageSize: Int,
-      chunkSize: Int,
-      folder: Path
-  )(
-      implicit scheduler: Scheduler,
-      log: Log[Task],
-      metrics: Metrics[Task],
-      cache: ConnectionsCache[Task, TcpConnTag]
-  ): TcpTransportLayer = {
-    val cert = Resources.withResource(Source.fromFile(certPath.toFile))(_.mkString)
-    val key  = Resources.withResource(Source.fromFile(keyPath.toFile))(_.mkString)
-    new TcpTransportLayer(port, cert, key, maxMessageSize, chunkSize, folder, 100)
-  }
 
   def rpConnections: Task[ConnectionsCell[Task]] =
     Cell.mvarCell[Task, Connections](Connections.empty)
@@ -98,36 +73,69 @@ package object effects {
       def ask: Task[Node]                = state.get.map(_.local)
     }
 
-  // https://tpolecat.github.io/doobie/docs/14-Managing-Connections.html#about-threading
-  def doobieTransactor(
-      connectEC: ExecutionContext,  // for waiting on connections, should be bounded
-      transactEC: ExecutionContext, // for JDBC, can be unbounded
+  def bootstrapsAsk(implicit state: MonadState[Task, RPConf]): ApplicativeAsk[Task, List[Node]] =
+    new DefaultApplicativeAsk[Task, List[Node]] {
+      val applicative: Applicative[Task] = Applicative[Task]
+      def ask: Task[List[Node]]          = state.get.map(_.bootstraps)
+    }
+
+  /**
+    * @see https://tpolecat.github.io/doobie/docs/14-Managing-Connections.html#about-threading
+    * @param connectEC for waiting on connections, should be bounded
+    * @param transactEC for JDBC, can be unbounded
+    * @return Write and read Transactors
+    */
+  def doobieTransactors(
+      connectEC: ExecutionContext,
+      transactEC: ExecutionContext,
       serverDataDir: Path
-  ): Resource[Effect, Transactor[Effect]] = {
-    val config = new HikariConfig()
-    config.setDriverClassName("org.sqlite.JDBC")
-    config.setJdbcUrl(s"jdbc:sqlite:${serverDataDir.resolve("sqlite.db")}")
-    config.setMinimumIdle(1)
-    config.setMaximumPoolSize(1)
-    // Using a connection pool with maximum size of 1 becuase with the default settings we got SQLITE_BUSY errors.
+  ): Resource[Task, (Transactor[Task], Transactor[Task])] = {
+    def mkConfig(poolSize: Int, foreignKeys: Boolean) = {
+      val config = new HikariConfig()
+      config.setDriverClassName("org.sqlite.JDBC")
+      config.setJdbcUrl(s"jdbc:sqlite:${serverDataDir.resolve("sqlite.db")}")
+      config.setMinimumIdle(1)
+      config.setMaximumPoolSize(poolSize)
+      // `autoCommit=true` is a default for Hikari; doobie sets `autoCommit=false`.
+      // From doobie's docs:
+      // * - Auto-commit will be set to `false`;
+      // * - the transaction will `commit` on success and `rollback` on failure;
+      // Setting it to false to avoid seeing resets in the log every time.
+      config.setAutoCommit(false)
+      // Foreign keys support must be enabled explicitly in SQLite; it doesn't affect read logic though.
+      // https://www.sqlite.org/foreignkeys.html#fk_enable
+      config.addDataSourceProperty("foreign_keys", foreignKeys.toString)
+      // NOTE: We still saw at least one SQLITE_BUSY error in testing, despite the 1 sized pool.
+      // NODE-1019 will add logging, maybe we'll learn more.
+      config.addDataSourceProperty("busy_timeout", "5000")
+      config.addDataSourceProperty("journal_mode", "WAL")
+      config
+    }
+
+    // Using a connection pool with maximum size of 1 for writers because with the default settings we got SQLITE_BUSY errors.
     // The SQLite docs say the driver is thread safe, but only one connection should be made per process
     // (the file locking mechanism depends on process IDs, closing one connection would invalidate the locks for all of them).
-    HikariTransactor
-      .fromHikariConfig[Effect](
-        config,
-        connectEC,
-        transactEC
-      )
-      .map { xa =>
-        // Foreign keys support must be enabled explicitly in SQLite
-        // https://www.sqlite.org/foreignkeys.html#fk_enable
-        val mxa = Transactor.before
-          .set(xa, sql"PRAGMA foreign_keys = ON;".update.run.void >> Transactor.before.get(xa))
-        // `autoCommit=true` is a default for Hikari; doobie sets `autoCommit=false`.
-        // From doobie's docs:
-        // * - Auto-commit will be set to `false`;
-        // * - the transaction will `commit` on success and `rollback` on failure;
-        Transactor.before.modify(mxa, _ >> connection.setAutoCommit(false))
-      }
+    val writeXaconfig = mkConfig(poolSize = 1, foreignKeys = true)
+
+    // Using a separate Transactor for read operations because
+    // we use fs2.Stream as a return type in some places which hold an opened connection
+    // preventing acquiring a connection in other places if we use a connection pool with size of 1.
+    val readXaconfig = mkConfig(poolSize = 10, foreignKeys = false)
+
+    // Hint: Use config.setLeakDetectionThreshold(10000) to detect connection leaking
+    for {
+      writeXa <- HikariTransactor
+                  .fromHikariConfig[Task](
+                    writeXaconfig,
+                    connectEC,
+                    Blocker.liftExecutionContext(transactEC)
+                  )
+      readXa <- HikariTransactor
+                 .fromHikariConfig[Task](
+                   readXaconfig,
+                   connectEC,
+                   Blocker.liftExecutionContext(transactEC)
+                 )
+    } yield (writeXa, readXa)
   }
 }

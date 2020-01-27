@@ -2,18 +2,22 @@ use std::convert::TryFrom;
 
 use wasmi::{Externals, RuntimeArgs, RuntimeValue, Trap};
 
-use contract_ffi::key::Key;
-use contract_ffi::value::{Value, U512};
+use types::{
+    account::PublicKey,
+    api_error,
+    bytesrepr::{self, ToBytes},
+    Key, TransferredTo, U512,
+};
+
+use engine_shared::{gas::Gas, stored_value::StoredValue};
 use engine_storage::global_state::StateReader;
 
-use super::args::Args;
-use super::{Error, Runtime};
+use super::{args::Args, Error, Runtime};
 use crate::resolvers::v1_function_index::FunctionIndex;
-use contract_ffi::bytesrepr::{self, ToBytes};
-use contract_ffi::value::account::{PublicKey, PurseId};
 
-impl<'a, R: StateReader<Key, Value>> Externals for Runtime<'a, R>
+impl<'a, R> Externals for Runtime<'a, R>
 where
+    R: StateReader<Key, StoredValue>,
     R::Error: Into<Error>,
 {
     fn invoke_index(
@@ -26,31 +30,27 @@ where
             FunctionIndex::ReadFuncIndex => {
                 // args(0) = pointer to key in Wasm memory
                 // args(1) = size of key in Wasm memory
-                let (key_ptr, key_size) = Args::parse(args)?;
-                let size = self.read(key_ptr, key_size)?;
-                Ok(Some(RuntimeValue::I32(size as i32)))
+                // args(2) = pointer to output size (output param)
+                let (key_ptr, key_size, output_size_ptr) = Args::parse(args)?;
+                let ret = self.read(key_ptr, key_size, output_size_ptr)?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
             }
 
             FunctionIndex::ReadLocalFuncIndex => {
-                // args(0) = pointer to key bytes in Wasm memory
-                // args(1) = size of key bytes in Wasm memory
-                let (key_bytes_ptr, key_bytes_size) = Args::parse(args)?;
-                let size = self.read_local(key_bytes_ptr, key_bytes_size)?;
-                Ok(Some(RuntimeValue::I32(size as i32)))
+                // args(0) = pointer to key in Wasm memory
+                // args(1) = size of key in Wasm memory
+                // args(2) = pointer to output size (output param)
+                let (key_ptr, key_size, output_size_ptr) = Args::parse(args)?;
+                let ret = self.read_local(key_ptr, key_size, output_size_ptr)?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
             }
 
-            FunctionIndex::SerFnFuncIndex => {
-                // args(0) = pointer to name in Wasm memory
-                // args(1) = size of name in Wasm memory
-                let (name_ptr, name_size) = Args::parse(args)?;
-                let size = self.serialize_function(name_ptr, name_size)?;
-                Ok(Some(RuntimeValue::I32(size as i32)))
-            }
-
-            FunctionIndex::SerKnownURefs => {
-                // No args, returns byte size of the known URefs.
-                let size = self.serialize_known_urefs()?;
-                Ok(Some(RuntimeValue::I32(size as i32)))
+            FunctionIndex::LoadNamedKeysFuncIndex => {
+                // args(0) = pointer to amount of keys (output)
+                // args(1) = pointer to amount of serialized bytes (output)
+                let (total_keys_ptr, result_size_ptr) = Args::parse(args)?;
+                let ret = self.load_named_keys(total_keys_ptr, result_size_ptr)?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
             }
 
             FunctionIndex::WriteFuncIndex => {
@@ -83,6 +83,16 @@ where
                 Ok(None)
             }
 
+            FunctionIndex::AddLocalFuncIndex => {
+                // args(0) = pointer to key in Wasm memory
+                // args(1) = size of key
+                // args(2) = pointer to value
+                // args(3) = size of value
+                let (key_bytes_ptr, key_bytes_size, value_ptr, value_size) = Args::parse(args)?;
+                self.add_local(key_bytes_ptr, key_bytes_size, value_ptr, value_size)?;
+                Ok(None)
+            }
+
             FunctionIndex::NewFuncIndex => {
                 // args(0) = pointer to key destination in Wasm memory
                 // args(1) = pointer to initial value
@@ -92,48 +102,29 @@ where
                 Ok(None)
             }
 
-            FunctionIndex::GetReadFuncIndex => {
-                // args(0) = pointer to destination in Wasm memory
-                let dest_ptr = Args::parse(args)?;
-                self.set_mem_from_buf(dest_ptr)?;
-                Ok(None)
-            }
-
-            FunctionIndex::GetFnFuncIndex => {
-                // args(0) = pointer to destination in Wasm memory
-                let dest_ptr = Args::parse(args)?;
-                self.set_mem_from_buf(dest_ptr)?;
-                Ok(None)
-            }
-
-            FunctionIndex::LoadArgFuncIndex => {
+            FunctionIndex::GetArgSizeFuncIndex => {
                 // args(0) = index of host runtime arg to load
-                let i = Args::parse(args)?;
-                let size = self.load_arg(i)?;
-                Ok(Some(RuntimeValue::I32(size as i32)))
+                // args(1) = pointer to a argument size (output)
+                let (index, size_ptr): (u32, u32) = Args::parse(args)?;
+                let ret = self.get_arg_size(index as usize, size_ptr)?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
             }
 
             FunctionIndex::GetArgFuncIndex => {
-                // args(0) = pointer to destination in Wasm memory
-                let dest_ptr = Args::parse(args)?;
-                self.set_mem_from_buf(dest_ptr)?;
-                Ok(None)
+                // args(0) = index of host runtime arg to load
+                // args(1) = pointer to destination in Wasm memory
+                // args(2) = size of destination pointer memory
+                let (index, dest_ptr, dest_size): (u32, _, u32) = Args::parse(args)?;
+                let ret = self.get_arg(index as usize, dest_ptr, dest_size as usize)?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
             }
 
             FunctionIndex::RetFuncIndex => {
                 // args(0) = pointer to value
                 // args(1) = size of value
-                // args(2) = pointer to extra returned urefs
-                // args(3) = size of extra urefs
-                let (value_ptr, value_size, extra_urefs_ptr, extra_urefs_size): (_, u32, _, u32) =
-                    Args::parse(args)?;
+                let (value_ptr, value_size): (_, u32) = Args::parse(args)?;
 
-                Err(self.ret(
-                    value_ptr,
-                    value_size as usize,
-                    extra_urefs_ptr,
-                    extra_urefs_size as usize,
-                ))
+                Err(self.ret(value_ptr, value_size as usize))
             }
 
             FunctionIndex::CallContractFuncIndex => {
@@ -141,69 +132,63 @@ where
                 // args(1) = size of key
                 // args(2) = pointer to function arguments in Wasm memory
                 // args(3) = size of arguments
-                // args(4) = pointer to extra supplied urefs
-                // args(5) = size of extra urefs
-                let (key_ptr, key_size, args_ptr, args_size, extra_urefs_ptr, extra_urefs_size) =
+                // args(4) = pointer to result size (output)
+                let (key_ptr, key_size, args_ptr, args_size, result_size_ptr): (_, _, _, u32, _) =
                     Args::parse(args)?;
-
-                // We have to explicitly tell rustc what type we expect as it cannot infer it
-                // otherwise.
-                let _args_size_u32: u32 = args_size;
-                let _extra_urefs_size_u32: u32 = extra_urefs_size;
 
                 let key_contract: Key = self.key_from_mem(key_ptr, key_size)?;
                 let args_bytes: Vec<u8> = self.bytes_from_mem(args_ptr, args_size as usize)?;
-                let urefs_bytes =
-                    self.bytes_from_mem(extra_urefs_ptr, extra_urefs_size as usize)?;
 
-                let size = self.call_contract(key_contract, args_bytes, urefs_bytes)?;
-                Ok(Some(RuntimeValue::I32(size as i32)))
+                let ret = self.call_contract_host_buf(key_contract, args_bytes, result_size_ptr)?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
             }
 
-            FunctionIndex::GetCallResultFuncIndex => {
-                // args(0) = pointer to destination in Wasm memory
-                let dest_ptr = Args::parse(args)?;
-                self.set_mem_from_buf(dest_ptr)?;
-                Ok(None)
+            FunctionIndex::GetKeyFuncIndex => {
+                // args(0) = pointer to key name in Wasm memory
+                // args(1) = size of key name
+                // args(2) = pointer to output buffer for serialized key
+                // args(3) = size of output buffer
+                // args(4) = pointer to bytes written
+                let (name_ptr, name_size, output_ptr, output_size, bytes_written): (
+                    u32,
+                    u32,
+                    u32,
+                    u32,
+                    u32,
+                ) = Args::parse(args)?;
+                let ret = self.load_key(
+                    name_ptr,
+                    name_size,
+                    output_ptr,
+                    output_size as usize,
+                    bytes_written,
+                )?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
             }
 
-            FunctionIndex::GetURefFuncIndex => {
-                // args(0) = pointer to uref name in Wasm memory
-                // args(1) = size of uref name
+            FunctionIndex::HasKeyFuncIndex => {
+                // args(0) = pointer to key name in Wasm memory
+                // args(1) = size of key name
                 let (name_ptr, name_size) = Args::parse(args)?;
-                let size = self.get_uref(name_ptr, name_size)?;
-                Ok(Some(RuntimeValue::I32(size as i32)))
-            }
-
-            FunctionIndex::HasURefFuncIndex => {
-                // args(0) = pointer to uref name in Wasm memory
-                // args(1) = size of uref name
-                let (name_ptr, name_size) = Args::parse(args)?;
-                let result = self.has_uref(name_ptr, name_size)?;
+                let result = self.has_key(name_ptr, name_size)?;
                 Ok(Some(RuntimeValue::I32(result)))
             }
 
-            FunctionIndex::AddURefFuncIndex => {
-                // args(0) = pointer to uref name in Wasm memory
-                // args(1) = size of uref name
-                // args(2) = pointer to destination in Wasm memory
+            FunctionIndex::PutKeyFuncIndex => {
+                // args(0) = pointer to key name in Wasm memory
+                // args(1) = size of key name
+                // args(2) = pointer to key in Wasm memory
+                // args(3) = size of key
                 let (name_ptr, name_size, key_ptr, key_size) = Args::parse(args)?;
-                self.add_uref(name_ptr, name_size, key_ptr, key_size)?;
+                self.put_key(name_ptr, name_size, key_ptr, key_size)?;
                 Ok(None)
             }
 
-            FunctionIndex::ListKnownURefsIndex => {
-                // args(0) = pointer to destination in Wasm memory
-                let ptr = Args::parse(args)?;
-                self.list_known_urefs(ptr)?;
-                Ok(None)
-            }
-
-            FunctionIndex::RemoveURef => {
-                // args(0) = pointer to uref name in Wasm memory
-                // args(1) = size of uref name
+            FunctionIndex::RemoveKeyFuncIndex => {
+                // args(0) = pointer to key name in Wasm memory
+                // args(1) = size of key name
                 let (name_ptr, name_size) = Args::parse(args)?;
-                self.remove_uref(name_ptr, name_size)?;
+                self.remove_key(name_ptr, name_size)?;
                 Ok(None)
             }
 
@@ -222,12 +207,33 @@ where
             }
 
             FunctionIndex::GasFuncIndex => {
-                let gas: u32 = Args::parse(args)?;
-                self.gas(u64::from(gas))?;
+                let gas_arg: u32 = Args::parse(args)?;
+                self.gas(Gas::new(gas_arg.into()))?;
                 Ok(None)
             }
 
             FunctionIndex::StoreFnIndex => {
+                // args(0) = pointer to function name in Wasm memory
+                // args(1) = size of the name
+                // args(2) = pointer to additional unforgable names
+                //           to be saved with the function body
+                // args(3) = size of the additional unforgable names
+                // args(4) = pointer to a Wasm memory where we will save
+                //           uref address of the new function
+                let (name_ptr, name_size, urefs_ptr, urefs_size, hash_ptr) = Args::parse(args)?;
+                let _uref_type: u32 = urefs_size;
+                let fn_bytes = self.get_function_by_name(name_ptr, name_size)?;
+                let uref_bytes = self
+                    .memory
+                    .get(urefs_ptr, urefs_size as usize)
+                    .map_err(Error::Interpreter)?;
+                let urefs = bytesrepr::deserialize(uref_bytes).map_err(Error::BytesRepr)?;
+                let contract_hash = self.store_function(fn_bytes, urefs)?;
+                self.function_address(contract_hash, hash_ptr)?;
+                Ok(None)
+            }
+
+            FunctionIndex::StoreFnAtHashIndex => {
                 // args(0) = pointer to function name in Wasm memory
                 // args(1) = size of the name
                 // args(2) = pointer to additional unforgable names
@@ -242,26 +248,20 @@ where
                     .memory
                     .get(urefs_ptr, urefs_size as usize)
                     .map_err(Error::Interpreter)?;
-                let urefs = bytesrepr::deserialize(&uref_bytes).map_err(Error::BytesRepr)?;
-                let contract_hash = self.store_function(fn_bytes, urefs)?;
+                let urefs = bytesrepr::deserialize(uref_bytes).map_err(Error::BytesRepr)?;
+                let contract_hash = self.store_function_at_hash(fn_bytes, urefs)?;
                 self.function_address(contract_hash, hash_ptr)?;
                 Ok(None)
             }
 
-            FunctionIndex::ProtocolVersionFuncIndex => {
-                Ok(Some(self.context.protocol_version().into()))
-            }
-
-            FunctionIndex::IsValidFnIndex => {
+            FunctionIndex::IsValidURefFnIndex => {
                 // args(0) = pointer to value to validate
                 // args(1) = size of value
-                let (value_ptr, value_size) = Args::parse(args)?;
+                let (uref_ptr, uref_size) = Args::parse(args)?;
 
-                if self.value_is_valid(value_ptr, value_size)? {
-                    Ok(Some(RuntimeValue::I32(1)))
-                } else {
-                    Ok(Some(RuntimeValue::I32(0)))
-                }
+                Ok(Some(RuntimeValue::I32(i32::from(
+                    self.is_valid_uref(uref_ptr, uref_size)?,
+                ))))
             }
 
             FunctionIndex::RevertFuncIndex => {
@@ -281,7 +281,6 @@ where
 
             FunctionIndex::RemoveAssociatedKeyFuncIndex => {
                 // args(0) = pointer to array of bytes of a public key
-                // args(1) = size of serialized bytes of public key
                 let public_key_ptr: u32 = Args::parse(args)?;
                 let value = self.remove_associated_key(public_key_ptr)?;
                 Ok(Some(RuntimeValue::I32(value)))
@@ -308,7 +307,7 @@ where
                 // args(1) = length of array for return value
                 let (dest_ptr, dest_size): (u32, u32) = Args::parse(args)?;
                 let purse_id = self.create_purse()?;
-                let purse_id_bytes = purse_id.to_bytes().map_err(Error::BytesRepr)?;
+                let purse_id_bytes = purse_id.into_bytes().map_err(Error::BytesRepr)?;
                 assert_eq!(dest_size, purse_id_bytes.len() as u32);
                 self.memory
                     .set(dest_ptr, &purse_id_bytes)
@@ -325,14 +324,14 @@ where
                     Args::parse(args)?;
                 let public_key: PublicKey = {
                     let bytes = self.bytes_from_mem(key_ptr, key_size as usize)?;
-                    bytesrepr::deserialize(&bytes).map_err(Error::BytesRepr)?
+                    bytesrepr::deserialize(bytes).map_err(Error::BytesRepr)?
                 };
                 let amount: U512 = {
                     let bytes = self.bytes_from_mem(amount_ptr, amount_size as usize)?;
-                    bytesrepr::deserialize(&bytes).map_err(Error::BytesRepr)?
+                    bytesrepr::deserialize(bytes).map_err(Error::BytesRepr)?
                 };
                 let ret = self.transfer_to_account(public_key, amount)?;
-                Ok(Some(RuntimeValue::I32(ret.into())))
+                Ok(Some(RuntimeValue::I32(TransferredTo::i32_from(ret))))
             }
 
             FunctionIndex::TransferFromPurseToAccountIndex => {
@@ -353,18 +352,18 @@ where
 
                 let source_purse = {
                     let bytes = self.bytes_from_mem(source_ptr, source_size as usize)?;
-                    bytesrepr::deserialize(&bytes).map_err(Error::BytesRepr)?
+                    bytesrepr::deserialize(bytes).map_err(Error::BytesRepr)?
                 };
                 let public_key: PublicKey = {
                     let bytes = self.bytes_from_mem(key_ptr, key_size as usize)?;
-                    bytesrepr::deserialize(&bytes).map_err(Error::BytesRepr)?
+                    bytesrepr::deserialize(bytes).map_err(Error::BytesRepr)?
                 };
                 let amount: U512 = {
                     let bytes = self.bytes_from_mem(amount_ptr, amount_size as usize)?;
-                    bytesrepr::deserialize(&bytes).map_err(Error::BytesRepr)?
+                    bytesrepr::deserialize(bytes).map_err(Error::BytesRepr)?
                 };
                 let ret = self.transfer_from_purse_to_account(source_purse, public_key, amount)?;
-                Ok(Some(RuntimeValue::I32(ret.into())))
+                Ok(Some(RuntimeValue::I32(TransferredTo::i32_from(ret))))
             }
 
             FunctionIndex::TransferFromPurseToPurseIndex => {
@@ -384,29 +383,16 @@ where
                     amount_ptr,
                     amount_size,
                 )?;
-                Ok(Some(RuntimeValue::I32(ret.into())))
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
             }
 
             FunctionIndex::GetBalanceIndex => {
                 // args(0) = pointer to purse_id input
                 // args(1) = length of purse_id
-                let (ptr, ptr_size): (u32, u32) = Args::parse(args)?;
-
-                let purse_id: PurseId = {
-                    let bytes = self.bytes_from_mem(ptr, ptr_size as usize)?;
-                    bytesrepr::deserialize(&bytes).map_err(Error::BytesRepr)?
-                };
-
-                let ret = match self.get_balance(purse_id)? {
-                    Some(balance) => {
-                        let balance_bytes = balance.to_bytes().map_err(Error::BytesRepr)?;
-                        self.host_buf = balance_bytes;
-                        self.host_buf.len() as i32
-                    }
-                    None => 0i32,
-                };
-
-                Ok(Some(RuntimeValue::I32(ret)))
+                // args(2) = pointer to output size (output)
+                let (ptr, ptr_size, output_size_ptr): (_, u32, _) = Args::parse(args)?;
+                let ret = self.get_balance_host_buf(ptr, ptr_size as usize, output_size_ptr)?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
             }
 
             FunctionIndex::GetPhaseIndex => {
@@ -414,6 +400,39 @@ where
                 let dest_ptr = Args::parse(args)?;
                 self.get_phase(dest_ptr)?;
                 Ok(None)
+            }
+
+            FunctionIndex::UpgradeContractAtURefIndex => {
+                // args(0) = pointer to name in Wasm memory
+                // args(1) = size of name in Wasm memory
+                // args(2) = pointer to key in Wasm memory
+                // args(3) = size of key
+                let (name_ptr, name_size, key_ptr, key_size) = Args::parse(args)?;
+                let ret = self.upgrade_contract_at_uref(name_ptr, name_size, key_ptr, key_size)?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
+            }
+
+            FunctionIndex::GetSystemContractIndex => {
+                // args(0) = system contract index
+                // args(1) = dest pointer for storing serialized result
+                // args(2) = dest pointer size
+                let (system_contract_index, dest_ptr, dest_size) = Args::parse(args)?;
+                let ret = self.get_system_contract(system_contract_index, dest_ptr, dest_size)?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
+            }
+
+            FunctionIndex::GetMainPurseIndex => {
+                // args(0) = pointer to Wasm memory where to write.
+                let dest_ptr = Args::parse(args)?;
+                self.get_main_purse(dest_ptr)?;
+                Ok(None)
+            }
+
+            FunctionIndex::ReadHostBufferIndex => {
+                // args(0) = pointer to Wasm memory where to write size.
+                let (dest_ptr, dest_size, bytes_written_ptr): (_, u32, _) = Args::parse(args)?;
+                let ret = self.read_host_buffer(dest_ptr, dest_size as usize, bytes_written_ptr)?;
+                Ok(Some(RuntimeValue::I32(api_error::i32_from(ret))))
             }
         }
     }

@@ -21,12 +21,11 @@ The open-source CasperLabs project is building a decentralized, economic, censor
 
 ## Getting Help
 
+- [Discord Server](https://discord.gg/mpZ9AYD)
 - [CasperLabs Community Forum](https://forums.casperlabs.io/)
 - [Telegram Channel](https://t.me/CasperLabs)
 
 ## Known Issues
-
-Currently there is a known issue with building and running the execution-engine binaries on a Mac. We recommend using docker for now until a fix is made.
 
 ## Issues
 

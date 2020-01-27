@@ -1,22 +1,20 @@
 #![no_std]
-#![feature(cell_update)]
 
-extern crate alloc;
-extern crate contract_ffi;
-
-use contract_ffi::contract_api::TransferResult;
-use contract_ffi::value::account::PublicKey;
-use contract_ffi::value::U512;
+use contract::{
+    contract_api::{runtime, system},
+    unwrap_or_revert::UnwrapOrRevert,
+};
+use types::{account::PublicKey, ApiError, U512};
 
 const ACCOUNT_2_ADDR: [u8; 32] = [2u8; 32];
-const TRANSFER_AMOUNT: u32 = 750;
 
 #[no_mangle]
 pub extern "C" fn call() {
     let public_key = PublicKey::new(ACCOUNT_2_ADDR);
-    let amount = U512::from(TRANSFER_AMOUNT);
+    let amount: U512 = runtime::get_arg(0)
+        .unwrap_or_revert_with(ApiError::MissingArgument)
+        .unwrap_or_revert_with(ApiError::InvalidArgument);
 
-    let result = contract_ffi::contract_api::transfer_to_account(public_key, amount);
-
-    assert_ne!(result, TransferResult::TransferError);
+    let result = system::transfer_to_account(public_key, amount);
+    assert!(result.is_ok());
 }

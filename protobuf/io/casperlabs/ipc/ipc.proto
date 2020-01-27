@@ -40,44 +40,18 @@ message Bond {
     io.casperlabs.casper.consensus.state.BigInt stake = 2;
 }
 
-message Deploy {
-    reserved 5;
-    // Public key of the account which is the context of the execution.
-    bytes address = 1; // length 32 bytes
-    DeployCode session = 3;
-    DeployCode payment = 4;
-    uint64 gas_price = 6; // in units of Mote / Gas
-    uint64 nonce = 7;
-    // Public keys used to sign this deploy, to be checked against the keys
-    // associated with the account.
-    repeated bytes authorization_keys = 8;
-}
-
 message DeployItem {
+    reserved 5; // motes in payment
+    reserved 7; // nonce
     // Public key of the account which is the context of the execution.
     bytes address = 1; // length 32 bytes
     DeployPayload session = 3;
     DeployPayload payment = 4;
-    uint64 motes_transferred_in_payment = 5; // in units of Motes -- someday this will come from running payment code
     uint64 gas_price = 6; // in units of Mote / Gas
-    uint64 nonce = 7;
     // Public keys used to sign this deploy, to be checked against the keys
     // associated with the account.
     repeated bytes authorization_keys = 8;
-}
-
-message ExecRequest {
-    bytes parent_state_hash = 1;
-    uint64 block_time = 2;
-    repeated Deploy deploys = 3;
-    io.casperlabs.casper.consensus.state.ProtocolVersion protocol_version = 4;
-}
-
-message ExecResponse {
-    oneof result {
-        ExecResult success = 1;
-        RootNotFound missing_parent = 2;
-    }
+    bytes deploy_hash = 9;
 }
 
 message ExecuteRequest {
@@ -105,6 +79,7 @@ message RootNotFound {
 message CommitRequest {
     bytes prestate_hash = 1;
     repeated TransformEntry effects = 2;
+    io.casperlabs.casper.consensus.state.ProtocolVersion protocol_version = 3;
 }
 
 message CommitResult {
@@ -190,13 +165,6 @@ message DeployError {
 }
 
 message DeployResult {
-    // Invalid nonce is not an error, it's also not a successful execution.
-    // Deploys with invalid nonce are returned to the deploy buffer.
-    message InvalidNonce {
-        uint64 deploy_nonce = 1;
-        uint64 expected_nonce = 2;
-    }
-
     // Deploys that failed because of precondition failure that we can't charge for
     // (invalid key format, invalid key address, invalid Wasm deploys).
     message PreconditionFailure {
@@ -204,15 +172,14 @@ message DeployResult {
     }
 
     // Execution result has effects and/or errors.
-    // Failed execution mutates the GlobalState by increasing the nonce and paying for the deploy.
+    // Failed execution mutates the GlobalState by paying for the deploy.
     message ExecutionResult {
         ExecutionEffect effects = 1;
         DeployError error = 2;
-        uint64 cost = 3;
+        io.casperlabs.casper.consensus.state.BigInt cost = 3;
     }
 
     oneof value {
-        InvalidNonce invalid_nonce = 1;
         PreconditionFailure precondition_failure = 2;
         ExecutionResult execution_result = 3;
     }
@@ -228,6 +195,7 @@ message QueryRequest {
     bytes state_hash = 1;
     io.casperlabs.casper.consensus.state.Key base_key = 2;
     repeated string path = 3;
+    io.casperlabs.casper.consensus.state.ProtocolVersion protocol_version = 4;
 }
 
 message QueryResponse {
@@ -238,30 +206,6 @@ message QueryResponse {
     }
 }
 
-
-message ValidateResponse {
-    message ValidateSuccess {};
-    oneof result {
-        ValidateSuccess success = 1;
-        string failure = 2;
-    }
-}
-
-message ValidateRequest {
-    bytes session_code = 1;
-    bytes payment_code = 2;
-}
-
-message GenesisRequest {
-    // genesis account public key, length 32 bytes
-    bytes address = 1;
-    io.casperlabs.casper.consensus.state.BigInt initial_motes = 2;
-    uint64 timestamp = 3;
-    DeployCode mint_code = 4;
-    DeployCode proof_of_stake_code = 5;
-    repeated Bond genesis_validators = 6;
-    io.casperlabs.casper.consensus.state.ProtocolVersion protocol_version = 7;
-}
 
 message GenesisResult {
     bytes poststate_hash = 1;
@@ -292,19 +236,31 @@ message ChainSpec {
         // generator used in execution engine for computing genesis post-state.
         uint64 timestamp = 2;
         io.casperlabs.casper.consensus.state.ProtocolVersion protocol_version = 3;
-        // path to contract for installing the mint system contract
-        string mint_path = 4;
-        // path to contract for installing the pos system contract
-        string pos_path = 5;
-        // path to csv file containing genesis account information
-        string accounts_path = 6;
+        // wasm bytecode for installing the mint system contract
+        bytes mint_installer = 4;
+        // wasm bytes for installing the pos system contract
+        bytes pos_installer = 5;
+        // genesis account information
+        repeated GenesisAccount accounts = 6;
         // costs at genesis
         CostTable costs = 7;
+        DeployConfig deploy_config = 8;
+    }
+
+    message GenesisAccount {
+        bytes public_key = 1;
+        io.casperlabs.casper.consensus.state.BigInt balance = 2; // in motes
+        io.casperlabs.casper.consensus.state.BigInt bonded_amount = 3; // in motes, 0 means "not bonded"
+    }
+
+    message DeployConfig {
+        uint32 max_ttl_millis = 2;
+        uint32 max_dependencies = 3;
     }
 
     message CostTable {
         WasmCosts wasm = 1;
-        HostFunctionCosts host = 2;
+        // TODO (https://casperlabs.atlassian.net/browse/EE-638): design host function costs
 
         message WasmCosts {
             // Default opcode cost
@@ -327,39 +283,55 @@ message ChainSpec {
             uint32 opcodes_mul = 9;
             uint32 opcodes_div = 10;
         }
-
-        message HostFunctionCosts {
-            // Presently we don't charge for anything happening
-            // outside wasm. But we probably should be. But this requires
-            // some design work, so we will leave this empty for now
-        }
     }
 
     message UpgradePoint {
-        // Hiding block height behind an abstraction because I am
-        // not sure if uint64 is sufficient to express it.
-        BlockHeight activation_point = 1;
+        // Hiding this behind an abstraction so we are free
+        // to change how such a point is expressed in the future.
+        ActivationPoint activation_point = 1;
         // The protocol version as of this upgrade
         io.casperlabs.casper.consensus.state.ProtocolVersion protocol_version = 2;
-        // path to contract to run that applies the upgrades to system contracts
-        string upgrade_contract_path = 3;
+        // bytes for a contract to run that applies the upgrades to system contracts
+        DeployCode upgrade_installer = 3;
         // Note: this is optional; only needed when costs are changing
         CostTable new_costs = 4;
+        DeployConfig new_deploy_config = 5;
     }
 
-    message BlockHeight {
+    message ActivationPoint {
+        // equal to Block.Header.rank
         uint64 rank = 1;
+    }
+}
+
+message UpgradeRequest {
+    bytes parent_state_hash = 1;
+    ChainSpec.UpgradePoint upgrade_point = 2;
+    io.casperlabs.casper.consensus.state.ProtocolVersion protocol_version = 3;
+}
+
+message UpgradeResult {
+    bytes post_state_hash = 1;
+    ExecutionEffect effect = 2;
+}
+
+message UpgradeDeployError {
+    string message = 1;
+}
+
+message UpgradeResponse {
+    oneof result {
+        UpgradeResult success = 1;
+        UpgradeDeployError failed_deploy = 2;
     }
 }
 
 // Definition of the service.
 // ExecutionEngine implements server part while Consensus implements client part.
 service ExecutionEngineService {
-    rpc exec (ExecRequest) returns (ExecResponse) {}
     rpc commit (CommitRequest) returns (CommitResponse) {}
     rpc query (QueryRequest) returns (QueryResponse) {}
-    rpc validate (ValidateRequest) returns (ValidateResponse) {}
-    rpc run_genesis (GenesisRequest) returns (GenesisResponse) {}
     rpc execute (ExecuteRequest) returns (ExecuteResponse) {}
-    rpc run_genesis_with_chainspec (ChainSpec.GenesisConfig) returns (GenesisResponse) {}
+    rpc run_genesis (ChainSpec.GenesisConfig) returns (GenesisResponse) {}
+    rpc upgrade (UpgradeRequest) returns (UpgradeResponse) {}
 }

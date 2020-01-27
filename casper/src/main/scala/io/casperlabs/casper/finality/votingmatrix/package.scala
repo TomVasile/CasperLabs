@@ -2,39 +2,43 @@ package io.casperlabs.casper.finality
 
 import cats.Monad
 import cats.implicits._
-import io.casperlabs.blockstorage.{BlockMetadata, DagRepresentation}
 import io.casperlabs.casper.Estimator.{BlockHash, Validator}
 import io.casperlabs.casper.finality.votingmatrix.VotingMatrix.{Vote, VotingMatrix}
 import io.casperlabs.catscontrib.MonadStateOps._
+import io.casperlabs.models.{Message, Weight}
+import io.casperlabs.storage.dag.DagRepresentation
 
 import scala.annotation.tailrec
 import scala.collection.mutable.{IndexedSeq => MutableSeq}
 
 package object votingmatrix {
 
+  import Weight.Implicits._
+  import Weight.Zero
+
   /**
     * Updates voting matrix when a new block added to dag
     * @param dag
-    * @param blockMetadata the new block
+    * @param msg the new message
     * @param currentVoteValue which branch the new block vote for
     * @return
     */
   def updateVoterPerspective[F[_]: Monad](
       dag: DagRepresentation[F],
-      blockMetadata: BlockMetadata,
+      msg: Message,
       currentVoteValue: BlockHash
   )(implicit matrix: VotingMatrix[F]): F[Unit] =
     for {
       validatorToIndex <- (matrix >> 'validatorToIdx).get
-      voter            = blockMetadata.validatorPublicKey
+      voter            = msg.validatorId
       _ <- if (!validatorToIndex.contains(voter)) {
             // The creator of block isn't from the validatorsSet
             // e.g. It is bonded after creating the latestFinalizedBlock
             ().pure[F]
           } else {
             for {
-              _ <- updateVotingMatrixOnNewBlock[F](dag, blockMetadata)
-              _ <- updateFirstZeroLevelVote[F](voter, currentVoteValue, blockMetadata.rank)
+              _ <- updateVotingMatrixOnNewBlock[F](dag, msg)
+              _ <- updateFirstZeroLevelVote[F](voter, currentVoteValue, msg.rank)
             } yield ()
           }
     } yield ()
@@ -45,13 +49,16 @@ package object votingmatrix {
     * @return
     */
   def checkForCommittee[F[_]: Monad](
+      dag: DagRepresentation[F],
       rFTT: Double
-  )(implicit matrix: VotingMatrix[F]): F[Option[CommitteeWithConsensusValue]] =
+  )(
+      implicit matrix: VotingMatrix[F]
+  ): F[Option[CommitteeWithConsensusValue]] =
     for {
       weightMap                 <- (matrix >> 'weightMap).get
       totalWeight               = weightMap.values.sum
-      quorum                    = math.ceil(totalWeight * (rFTT + 0.5)).toLong
-      committeeApproximationOpt <- findCommitteeApproximation[F](quorum)
+      quorum                    = totalWeight * (rFTT + 0.5)
+      committeeApproximationOpt <- findCommitteeApproximation[F](dag, quorum)
       result <- committeeApproximationOpt match {
                  case Some(
                      CommitteeWithConsensusValue(committeeApproximation, _, consensusValue)
@@ -63,7 +70,7 @@ package object votingmatrix {
                      mask = FinalityDetectorUtil
                        .fromMapToArray(validatorToIndex, committeeApproximation.contains)
                      weight = FinalityDetectorUtil
-                       .fromMapToArray(validatorToIndex, weightMap.getOrElse(_, 0L))
+                       .fromMapToArray(validatorToIndex, weightMap.getOrElse(_, Zero))
                      committeeOpt = pruneLoop(
                        votingMatrix,
                        firstLevelZeroVotes,
@@ -85,14 +92,15 @@ package object votingmatrix {
 
   private[votingmatrix] def updateVotingMatrixOnNewBlock[F[_]: Monad](
       dag: DagRepresentation[F],
-      blockMetadata: BlockMetadata
+      msg: Message
   )(implicit matrix: VotingMatrix[F]): F[Unit] =
     for {
       validatorToIndex <- (matrix >> 'validatorToIdx).get
-      panoramaM        <- FinalityDetectorUtil.panoramaM[F](dag, validatorToIndex, blockMetadata)
+      panoramaM <- FinalityDetectorUtil
+                    .panoramaM[F](dag, validatorToIndex, msg)
       // Replace row i in voting-matrix by panoramaM
       _ <- (matrix >> 'votingMatrix).modify(
-            _.updated(validatorToIndex(blockMetadata.validatorPublicKey), panoramaM)
+            _.updated(validatorToIndex(msg.validatorId), panoramaM)
           )
     } yield ()
 
@@ -128,24 +136,27 @@ package object votingmatrix {
     * @return
     */
   private[votingmatrix] def findCommitteeApproximation[F[_]: Monad](
-      quorum: Long
+      dag: DagRepresentation[F],
+      quorum: Weight
   )(implicit matrix: VotingMatrix[F]): F[Option[CommitteeWithConsensusValue]] =
     for {
+      equivocators        <- dag.getEquivocators
       weightMap           <- (matrix >> 'weightMap).get
       validators          <- (matrix >> 'validators).get
       firstLevelZeroVotes <- (matrix >> 'firstLevelZeroVotes).get
       // Get Map[VoteBranch, List[Validator]] directly from firstLevelZeroVotes
-      consensusValueToValidators = firstLevelZeroVotes.zipWithIndex
+      consensusValueToHonestValidators = firstLevelZeroVotes.zipWithIndex
         .collect { case (Some((blockHash, _)), idx) => (blockHash, validators(idx)) }
+        .filterNot { case (_, validator) => equivocators.contains(validator) }
         .groupBy(_._1)
         .mapValues(_.map(_._2))
       // Get most support voteBranch and its support weight
-      mostSupport = consensusValueToValidators
-        .mapValues(_.map(weightMap.getOrElse(_, 0L)).sum)
+      mostSupport = consensusValueToHonestValidators
+        .mapValues(_.map(weightMap.getOrElse(_, Zero)).sum)
         .maxBy(_._2)
       (voteValue, supportingWeight) = mostSupport
       // Get the voteBranch's supporters
-      supporters = consensusValueToValidators(voteValue)
+      supporters = consensusValueToHonestValidators(voteValue)
     } yield
       if (supportingWeight > quorum) {
         Some(CommitteeWithConsensusValue(supporters.toSet, supportingWeight, voteValue))
@@ -155,26 +166,26 @@ package object votingmatrix {
 
   @tailrec
   private[votingmatrix] def pruneLoop(
-      matrix: MutableSeq[MutableSeq[Long]],
+      matrix: MutableSeq[MutableSeq[Level]],
       firstLevelZeroVotes: MutableSeq[Option[Vote]],
       candidateBlockHash: BlockHash,
       mask: MutableSeq[Boolean],
-      q: Long,
-      weight: MutableSeq[Long]
-  ): Option[(MutableSeq[Boolean], Long)] = {
+      q: Weight,
+      weight: MutableSeq[Weight]
+  ): Option[(MutableSeq[Boolean], Weight)] = {
     val (newMask, prunedValidator, maxTotalWeight) = matrix.zipWithIndex
       .filter { case (_, rowIndex) => mask(rowIndex) }
-      .foldLeft((mask, false, 0L)) {
+      .foldLeft((mask, false, Zero)) {
         case ((newMask, prunedValidator, maxTotalWeight), (row, rowIndex)) =>
           val voteSum = row.zipWithIndex
             .filter { case (_, columnIndex) => mask(columnIndex) }
             .map {
               case (latestDagLevelSeen, columnIndex) =>
-                firstLevelZeroVotes(columnIndex).fold(0L) {
+                firstLevelZeroVotes(columnIndex).fold(Zero) {
                   case (consensusValue, dagLevelOf1stLevel0) =>
                     if (consensusValue == candidateBlockHash && dagLevelOf1stLevel0 <= latestDagLevelSeen)
                       weight(columnIndex)
-                    else 0L
+                    else Zero
                 }
             }
             .sum

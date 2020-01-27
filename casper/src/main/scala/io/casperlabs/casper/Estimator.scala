@@ -1,83 +1,95 @@
 package io.casperlabs.casper
 
 import cats.Monad
-import io.casperlabs.catscontrib.MonadThrowable
+import cats.data.NonEmptyList
 import cats.implicits._
 import com.google.protobuf.ByteString
-import io.casperlabs.blockstorage.{BlockMetadata, DagRepresentation}
-import io.casperlabs.casper.util.{implicits, DagOperations}
-import implicits.{eqBlockHash, showBlockHash}
+import io.casperlabs.casper.util.DagOperations
 import io.casperlabs.casper.util.ProtoUtil.weightFromValidatorByDag
+import io.casperlabs.catscontrib.MonadThrowable
+import io.casperlabs.metrics.Metrics
+import io.casperlabs.metrics.implicits._
+import io.casperlabs.models.{Message, Weight}
+import io.casperlabs.storage.dag.DagRepresentation
+import io.casperlabs.shared.{Log, Sorting}
+import Sorting.byteStringOrdering
 
-import scala.collection.immutable.{Map, Set}
+import scala.collection.immutable.Map
 
 object Estimator {
   type BlockHash = ByteString
   type Validator = ByteString
 
-  implicit val decreasingOrder = Ordering[Long].reverse
+  import Weight._
 
-  def tips[F[_]: MonadThrowable](
+  implicit val metricsSource = CasperMetricsSource
+  val increasingOrder        = Ordering[Long]
+
+  def tips[F[_]: MonadThrowable: Metrics: Log](
       dag: DagRepresentation[F],
-      genesis: BlockHash
-  ): F[IndexedSeq[BlockHash]] =
-    for {
-      latestMessageHashes <- dag.latestMessageHashes
-      result <- Estimator
-                 .tips[F](dag, genesis, latestMessageHashes)
-    } yield result.toIndexedSeq
+      lfbHash: BlockHash,
+      latestMessageHashes: Map[Validator, Set[BlockHash]],
+      equivocators: Set[Validator]
+  ): F[NonEmptyList[BlockHash]] = {
 
-  def tips[F[_]: MonadThrowable](
-      dag: DagRepresentation[F],
-      genesis: BlockHash,
-      latestMessagesHashes: Map[Validator, BlockHash]
-  ): F[List[BlockHash]] = {
-
-    /** Finds children of the block b that have been scored by the LMD algorithm.
-      * If no children exist (block B is the tip) return the block.
-      *
-      * @param b block for which we want to find tips.
-      * @param scores map of the scores from the block hash to a score
-      * @return Children of the block.
-      */
-    def getChildrenOrSelf(
-        b: BlockHash,
-        scores: Map[BlockHash, Long]
-    ): F[List[BlockHash]] =
-      dag
-        .children(b)
-        .map(_.filter(scores.contains))
-        .map(c => if (c.isEmpty) List(b) else c.toList)
-
-    /*
-     * Returns latestMessages except those blocks whose descendant
-     * exists in latestMessages.
-     */
+    /** Eliminate any latest message which has a descendant which is a latest message
+      * of another validator, because in that case those descendants should be the tips. */
     def tipsOfLatestMessages(
-        blocks: List[BlockHash],
-        scores: Map[BlockHash, Long]
-    ): F[List[BlockHash]] =
+        latestMessages: NonEmptyList[BlockHash],
+        stopHash: BlockHash
+    ): F[List[Message]] = {
+      // Start from the highest latest messages and traverse backwards
+      implicit val ord = DagOperations.blockTopoOrderingDesc
       for {
-        children <- blocks.flatTraverse(getChildrenOrSelf(_, scores)).map(_.distinct)
-        result <- if (blocks.toSet == children.toSet) {
-                   children.pure[F]
-                 } else {
-                   tipsOfLatestMessages(children, scores)
+        latestMessagesMeta <- latestMessages.traverse(dag.lookupUnsafe(_))
+        tips <- DagOperations
+                 .bfToposortTraverseF[F](latestMessagesMeta.toList)(
+                   _.parents.toList.traverse(dag.lookupUnsafe(_))
+                 )
+                 .takeUntil(_.messageHash == stopHash)
+                 // We start with the tips and remove any message
+                 // that is reachable through the parent-child link from other tips.
+                 // This should leave us only with the tips that cannot be reached from others.
+                 .foldLeft(latestMessagesMeta.toList.toSet) {
+                   case (tips, message) =>
+                     tips.filterNot(msg => message.parents.toSet.contains(msg.messageHash))
                  }
-      } yield result
+      } yield tips.toList
+    }
 
     for {
-      lca <- if (latestMessagesHashes.isEmpty) genesis.pure[F]
-            else
-              DagOperations.latestCommonAncestorsMainParent(dag, latestMessagesHashes.values.toList)
-      scores           <- lmdScoring(dag, lca, latestMessagesHashes)
-      newMainParent    <- forkChoiceTip(dag, lca, scores)
-      parents          <- tipsOfLatestMessages(latestMessagesHashes.values.toList, scores)
-      secondaryParents = parents.filter(_ != newMainParent)
+      lfb <- dag.lookupUnsafe(lfbHash)
+      latestMessages <- latestMessageHashes.values.flatten.toList
+                         .traverse(dag.lookupUnsafe(_))
+                         .map(_.filterNot(_.rank < lfb.rank)) // Filter out messages that are older than LFB.
+                         .map(NonEmptyList.fromList(_).getOrElse(NonEmptyList.one(lfb)))
+      latestMessagesByV = latestMessages.groupBy(_.validatorId)(cats.Order.fromOrdering[ByteString])
+      lfbDistance       = latestMessages.toList.maxBy(_.rank)(increasingOrder).rank - lfb.rank
+      _                 <- Metrics[F].record("lfbDistance", lfbDistance)
+      scores <- lmdScoring(
+                 dag,
+                 lfb.messageHash,
+                 latestMessagesByV.mapValues(_.toList.map(_.messageHash).toSet),
+                 equivocators
+               ).timer("lmdScoring")
+      newMainParent <- forkChoiceTip(dag, lfb.messageHash, scores).timer("forkChoiceTip")
+      parents <- tipsOfLatestMessages(
+                  latestMessages.map(_.messageHash),
+                  lfb.messageHash
+                ).timer("tipsOfLatestMessages")
+      secondaryParents = parents.filter(_.messageHash != newMainParent).filterNot { message =>
+        // Filter out blocks created by equivocators from the secondary parents.
+        // Secondary parents are not subject to the fork choice rule, the only requirement
+        // is that they don't conflict with the main chain. This opens up possibility for various
+        // kinds of attacks. An example could be a block created in the past, that includes a deploy
+        // that should have expired by now, if that block did not conflict with the main parent
+        // fork-choice would include it in the p-dag.
+        equivocators.contains(message.validatorId)
+      }
       sortedSecParents = secondaryParents
-        .sortBy(b => scores.getOrElse(b, 0L) -> b.toStringUtf8)
+        .sortBy(b => scores.getOrElse(b.messageHash, Zero) -> b.messageHash.toStringUtf8)
         .reverse
-    } yield newMainParent +: sortedSecParents
+    } yield NonEmptyList(newMainParent, sortedSecParents.map(_.messageHash))
   }
 
   /** Computes scores for LMD GHOST.
@@ -89,26 +101,38 @@ object Estimator {
     * @param stopHash Block at which we stop computing scores. Should be latest common ancestor of `latestMessagesHashes`.
     * @return Scores map.
     */
-  def lmdScoring[F[_]: Monad](
+  def lmdScoring[F[_]: MonadThrowable](
       dag: DagRepresentation[F],
       stopHash: BlockHash,
-      latestMessagesHashes: Map[Validator, BlockHash]
-  ): F[Map[BlockHash, Long]] =
-    latestMessagesHashes.toList.foldLeftM(Map.empty[BlockHash, Long]) {
-      case (acc, (validator, latestMessageHash)) =>
-        DagOperations
-          .bfTraverseF[F, BlockHash](List(latestMessageHash))(
-            hash => dag.lookup(hash).map(_.get.parents.take(1))
-          )
-          .takeUntil(_ == stopHash)
-          .foldLeftF(acc) {
-            case (acc2, blockHash) =>
-              weightFromValidatorByDag(dag, blockHash, validator).map(weight => {
-                val oldValue = acc2.getOrElse(blockHash, 0L)
-                acc2.updated(blockHash, weight + oldValue)
-              })
-          }
+      latestMessageHashes: Map[Validator, Set[BlockHash]],
+      equivocatingValidators: Set[Validator]
+  ): F[Map[BlockHash, Weight]] = {
+    implicit val messageOrder = DagOperations.blockTopoOrderingDesc
+    latestMessageHashes.toList.foldLeftM(Map.empty[BlockHash, Weight]) {
+      case (acc, (validator, latestMessageHashes)) =>
+        for {
+          sortedMessages <- latestMessageHashes.toList
+                             .traverse(dag.lookup(_))
+                             .map(_.flatten.sortBy(_.rank))
+          lmdScore <- DagOperations
+                       .bfToposortTraverseF[F](sortedMessages)(
+                         _.parents.take(1).toList.traverse(dag.lookupUnsafe(_))
+                       )
+                       .takeUntil(_.messageHash == stopHash)
+                       .foldLeftF(acc) {
+                         case (acc2, message) =>
+                           (if (equivocatingValidators.contains(validator)) {
+                              Zero.pure[F]
+                            } else {
+                              weightFromValidatorByDag(dag, message.messageHash, validator)
+                            }).map { realWeight =>
+                             val oldValue = acc2.getOrElse(message.messageHash, Zero)
+                             acc2.updated(message.messageHash, realWeight + oldValue)
+                           }
+                       }
+        } yield lmdScore
     }
+  }
 
   /**
     * Computes fork choice.
@@ -121,7 +145,7 @@ object Estimator {
   def forkChoiceTip[F[_]: Monad](
       dag: DagRepresentation[F],
       startingBlock: BlockHash,
-      scores: Map[BlockHash, Long]
+      scores: Map[BlockHash, Weight]
   ): F[BlockHash] =
     dag.getMainChildren(startingBlock).flatMap { mainChildren =>
       {
@@ -131,7 +155,7 @@ object Estimator {
           startingBlock.pure[F]
         } else {
           val highestScoreChild =
-            reachableMainChildren.maxBy(b => scores(b) -> b.toStringUtf8)
+            reachableMainChildren.maxBy(b => scores(b) -> b)(DagOperations.bigIntByteStringOrdering)
           forkChoiceTip[F](
             dag,
             highestScoreChild,

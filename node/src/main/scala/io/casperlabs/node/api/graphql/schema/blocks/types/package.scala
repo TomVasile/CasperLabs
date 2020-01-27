@@ -2,15 +2,23 @@ package io.casperlabs.node.api.graphql.schema.blocks
 
 import cats.syntax.either._
 import cats.syntax.option._
+import io.casperlabs.casper.api.BlockAPI.BlockAndMaybeDeploys
 import io.casperlabs.casper.consensus.Block._
 import io.casperlabs.casper.consensus._
 import io.casperlabs.casper.consensus.info.DeployInfo.ProcessingResult
 import io.casperlabs.casper.consensus.info._
-import io.casperlabs.crypto.codec.{Base16, Base64}
-import io.casperlabs.node.api.graphql.schema.utils.DateType
+import io.casperlabs.crypto.codec.Base16
+import io.casperlabs.node.api.graphql.schema.utils.{DateType, ProtocolVersionType}
+import io.casperlabs.models.BlockImplicits._
 import sangria.schema._
+import sangria.macros.derive._
+
+case class PageInfo(endCursor: String, hasNextPage: Boolean)
+
+case class DeployInfosWithPageInfo(deployInfos: List[DeployInfo], pageInfo: PageInfo)
 
 package object types {
+
   val SignatureType = ObjectType(
     "Signature",
     "Signature used to sign Block or Deploy",
@@ -37,8 +45,8 @@ package object types {
       Field(
         "approverPublicKey",
         StringType,
-        "Base-64 encoded public key of approver".some,
-        resolve = c => Base64.encode(c.value.approverPublicKey.toByteArray)
+        "Base-16 encoded public key of approver".some,
+        resolve = c => Base16.encode(c.value.approverPublicKey.toByteArray)
       ),
       Field(
         "signature",
@@ -62,14 +70,8 @@ package object types {
       Field(
         "accountId",
         StringType,
-        "Base-64 encoded account public key".some,
-        resolve = c => Base64.encode(c.value.getHeader.accountPublicKey.toByteArray)
-      ),
-      Field(
-        "nonce",
-        LongType,
-        "Nonce that should be incremented on each deploy for an account".some,
-        resolve = c => c.value.getHeader.nonce
+        "Base-16 encoded account public key".some,
+        resolve = c => Base16.encode(c.value.getHeader.accountPublicKey.toByteArray)
       ),
       Field(
         "timestamp",
@@ -129,7 +131,7 @@ package object types {
   val BlockInfoInterface = InterfaceType(
     "BlockInfo",
     "Basic block information which doesn't require reading a full block",
-    fields[Unit, (BlockInfo, Option[Block])](
+    fields[Unit, BlockAndMaybeDeploys](
       Field(
         "blockHash",
         StringType,
@@ -140,58 +142,63 @@ package object types {
         "parentHashes",
         ListType(StringType),
         "Hashes of parent blocks".some,
-        resolve =
-          c => c.value._1.getSummary.getHeader.parentHashes.map(p => Base16.encode(p.toByteArray))
+        resolve = c => c.value._1.getSummary.parents.map(p => Base16.encode(p.toByteArray))
       ),
       Field(
         "justificationHashes",
         ListType(StringType),
         "Hashes of justification blocks".some,
         resolve = c =>
-          c.value._1.getSummary.getHeader.justifications
+          c.value._1.getSummary.justifications
             .map(j => Base16.encode(j.latestBlockHash.toByteArray))
+      ),
+      Field(
+        "childHashes",
+        ListType(StringType),
+        "Hashes of child blocks".some,
+        resolve = c => c.value._1.getStatus.childHashes.map(p => Base16.encode(p.toByteArray))
       ),
       Field(
         "timestamp",
         DateType,
         "Timestamp when the block was created".some,
-        resolve = c => c.value._1.getSummary.getHeader.timestamp
+        resolve = c => c.value._1.getSummary.timestamp
       ),
       Field(
         "protocolVersion",
-        LongType,
+        ProtocolVersionType,
         "Protocol version of CasperLabs blockchain".some,
-        resolve = c => c.value._1.getSummary.getHeader.protocolVersion
+        resolve = c => c.value._1.getSummary.getHeader.getProtocolVersion
       ),
       Field(
         "deployCount",
         IntType,
         "Amount of deploys in the block".some,
-        resolve = c => c.value._1.getSummary.getHeader.deployCount
+        resolve = c => c.value._1.getSummary.deployCount
       ),
       Field(
         "rank",
         LongType,
         "Amount of hops needed to reach a genesis from the block".some,
-        resolve = c => c.value._1.getSummary.getHeader.rank
+        resolve = c => c.value._1.getSummary.rank
       ),
       Field(
         "validatorPublicKey",
         StringType,
-        "Base-64 encoded public key of a validator created the block".some,
-        resolve = c => Base64.encode(c.value._1.getSummary.getHeader.validatorPublicKey.toByteArray)
+        "Base-16 encoded public key of a validator created the block".some,
+        resolve = c => Base16.encode(c.value._1.getSummary.validatorPublicKey.toByteArray)
       ),
       Field(
         "validatorBlockSeqNum",
         IntType,
         "The block's number by the validator".some,
-        resolve = c => c.value._1.getSummary.getHeader.validatorBlockSeqNum
+        resolve = c => c.value._1.getSummary.validatorBlockSeqNum
       ),
       Field(
-        "chainId",
+        "chainName",
         StringType,
-        "Chain id of where the block was created".some,
-        resolve = c => c.value._1.getSummary.getHeader.chainId
+        "Chain name of where the block was created".some,
+        resolve = c => c.value._1.getSummary.chainName
       ),
       Field(
         "signature",
@@ -203,7 +210,7 @@ package object types {
         "deploys",
         ListType(ProcessedDeployType),
         "Deploys in the block".some,
-        resolve = c => c.value._2.get.getBody.deploys.toList.map(_.asLeft[ProcessingResult])
+        resolve = c => c.value._2.get.map(_.asLeft[ProcessingResult])
       ),
       Field(
         "faultTolerance",
@@ -219,6 +226,16 @@ package object types {
         "deployErrorCount",
         OptionType(IntType),
         resolve = c => c.value._1.getStatus.stats.map(_.deployErrorCount)
+      ),
+      Field(
+        "deployCostTotal",
+        OptionType(LongType),
+        resolve = c => c.value._1.getStatus.stats.map(_.deployCostTotal)
+      ),
+      Field(
+        "deployGasPriceAvg",
+        OptionType(LongType),
+        resolve = c => c.value._1.getStatus.stats.map(_.deployGasPriceAvg)
       )
     )
   )
@@ -233,7 +250,8 @@ package object types {
       Field(
         "block",
         BlockInfoInterface,
-        resolve = c => (c.value.right.get.getBlockInfo, none[Block])
+        // Producing the BlockInfo from the one embedded in `DeployInfo.ProcessingResult`; it won't have further deploys with it for the block.
+        resolve = c => (c.value.right.get.getBlockInfo, none[List[Block.ProcessedDeploy]])
       )
     )
   )
@@ -257,14 +275,42 @@ package object types {
 
   val BlockType = ObjectType(
     "Block",
-    interfaces[Unit, (BlockInfo, Option[Block])](BlockInfoInterface),
-    fields[Unit, (BlockInfo, Option[Block])](
+    interfaces[Unit, BlockAndMaybeDeploys](BlockInfoInterface),
+    fields[Unit, BlockAndMaybeDeploys](
       Field(
         "deploys",
         ListType(ProcessedDeployType),
         "Deploys in the block".some,
-        resolve = c => c.value._2.get.getBody.deploys.toList.map(_.asLeft[ProcessingResult])
+        resolve = c => c.value._2.get.map(_.asLeft[ProcessingResult])
       )
+    )
+  )
+
+  val PageInfoType = ObjectType(
+    "PageInfo",
+    "Cursor based pagination information",
+    fields[Unit, PageInfo](
+      Field(
+        "endCursor",
+        StringType,
+        "The cursor of the last item in result".some,
+        resolve = _.value.endCursor
+      ),
+      Field(
+        "hasNextPage",
+        BooleanType,
+        "Whether there is another page of data available".some,
+        resolve = _.value.hasNextPage
+      )
+    )
+  )
+
+  val DeployInfosWithPageInfoType = ObjectType(
+    "deploys",
+    "A list of deploys for the specified account",
+    fields[Unit, DeployInfosWithPageInfo](
+      Field("deployInfos", ListType(DeployInfoType), resolve = _.value.deployInfos),
+      Field("pageInfo", PageInfoType, resolve = _.value.pageInfo)
     )
   )
 }

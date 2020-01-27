@@ -1,20 +1,18 @@
-use std::collections::BTreeMap;
-use std::ops::RangeInclusive;
+use std::{collections::BTreeMap, ops::RangeInclusive};
 
 use lmdb::DatabaseFlags;
-use proptest::collection;
-use proptest::num;
-use proptest::prelude::proptest;
+use proptest::{collection, prelude::proptest};
 use tempfile;
 
-use crate::protocol_data::{gens, ProtocolData};
-use crate::protocol_data_store::in_memory::InMemoryProtocolDataStore;
-use crate::protocol_data_store::lmdb::LmdbProtocolDataStore;
-use crate::protocol_data_store::ProtocolVersion;
-use crate::store::tests as store_tests;
-use crate::transaction_source::in_memory::InMemoryEnvironment;
-use crate::transaction_source::lmdb::LmdbEnvironment;
-use crate::TEST_MAP_SIZE;
+use types::{gens as gens_ext, ProtocolVersion};
+
+use crate::{
+    protocol_data::{gens, ProtocolData},
+    protocol_data_store::{in_memory::InMemoryProtocolDataStore, lmdb::LmdbProtocolDataStore},
+    store::tests as store_tests,
+    transaction_source::{in_memory::InMemoryEnvironment, lmdb::LmdbEnvironment},
+    TEST_MAP_SIZE,
+};
 
 const DEFAULT_MIN_LENGTH: usize = 1;
 const DEFAULT_MAX_LENGTH: usize = 16;
@@ -49,14 +47,14 @@ fn lmdb_roundtrip_succeeds(inputs: BTreeMap<ProtocolVersion, ProtocolData>) -> b
 proptest! {
     #[test]
     fn prop_in_memory_roundtrip_succeeds(
-        m in collection::btree_map(num::u64::ANY, gens::protocol_data_arb(), get_range())
+        m in collection::btree_map(gens_ext::protocol_version_arb(), gens::protocol_data_arb(), get_range())
     ) {
         assert!(in_memory_roundtrip_succeeds(m))
     }
 
     #[test]
     fn prop_lmdb_roundtrip_succeeds(
-        m in collection::btree_map(num::u64::ANY, gens::protocol_data_arb(), get_range())
+        m in collection::btree_map(gens_ext::protocol_version_arb(), gens::protocol_data_arb(), get_range())
     ) {
         assert!(lmdb_roundtrip_succeeds(m))
     }

@@ -1,42 +1,41 @@
 package io.casperlabs.comm.gossiping
 
-import cats._
+import cats.Parallel
 import cats.effect._
 import cats.effect.concurrent._
 import cats.effect.implicits._
 import cats.implicits._
-import cats.temp.par._
 import com.google.protobuf.ByteString
 import io.casperlabs.casper.consensus.{Block, BlockSummary, GenesisCandidate}
 import io.casperlabs.comm.ServiceError.NotFound
 import io.casperlabs.comm.discovery.Node
 import io.casperlabs.comm.discovery.NodeUtils.showNode
-import io.casperlabs.comm.gossiping.Synchronizer.SyncError
-import io.casperlabs.comm.gossiping.Utils._
-import io.casperlabs.shared.{Compression, Log}
+import io.casperlabs.comm.gossiping.synchronization.Synchronizer.SyncError
+import io.casperlabs.comm.gossiping.synchronization.Synchronizer
 import io.casperlabs.metrics.Metrics
+import io.casperlabs.models.BlockImplicits._
+import io.casperlabs.shared.{Compression, Log}
 import monix.tail.Iterant
 
 import scala.collection.immutable.Queue
 import scala.util.control.NonFatal
 
 /** Server side implementation talking to the rest of the node such as casper, storage, download manager. */
-class GossipServiceServer[F[_]: Concurrent: Par: Log: Metrics](
+class GossipServiceServer[F[_]: Concurrent: Parallel: Log: Metrics](
     backend: GossipServiceServer.Backend[F],
     synchronizer: Synchronizer[F],
     downloadManager: DownloadManager[F],
-    consensus: GossipServiceServer.Consensus[F],
     genesisApprover: GenesisApprover[F],
     maxChunkSize: Int,
     blockDownloadSemaphore: Semaphore[F]
 ) extends GossipService[F] {
   import GossipServiceServer._
 
+  //TODO: Rate limit here as well?
   override def newBlocks(request: NewBlocksRequest): F[NewBlocksResponse] =
     // Collect the blocks which we don't have yet;
     // reply about those that we are going to download and relay them,
-    // then asynchronously sync the DAG, schedule the downloads,
-    // and finally notify the consensus engine.
+    // then asynchronously sync the DAG, and schedule the downloads.
     newBlocks(
       request,
       skipRelaying = false,
@@ -52,8 +51,12 @@ class GossipServiceServer[F[_]: Concurrent: Par: Log: Metrics](
     newBlocks(
       request,
       skipRelaying,
+      // Wait for the the returned handles. This is the assumed behaviour in Casper unit tests.
       (syncOpt, response) =>
-        syncOpt.fold(response.asRight[SyncError].pure[F])(_.map(_.as(response)))
+        syncOpt.fold(response.asRight[SyncError].pure[F])(_.flatMap {
+          case Left(error)    => error.asLeft[NewBlocksResponse].pure[F]
+          case Right(waiters) => waiters.parTraverse(identity).as(response.asRight)
+        })
     )
 
   /** Creates the syncing procedure if there are blocks missing,
@@ -62,7 +65,9 @@ class GossipServiceServer[F[_]: Concurrent: Par: Log: Metrics](
   private def newBlocks[T](
       request: NewBlocksRequest,
       skipRelaying: Boolean,
-      start: (Option[F[Either[SyncError, Unit]]], NewBlocksResponse) => F[T]
+      // Callback to switch between sync and async modes;
+      // the option None is no syncing is required.
+      start: (Option[F[Either[SyncError, Vector[WaitHandle[F]]]]], NewBlocksResponse) => F[T]
   ): F[T] =
     request.blockHashes.distinct.toList
       .filterA { blockHash =>
@@ -80,55 +85,52 @@ class GossipServiceServer[F[_]: Concurrent: Par: Log: Metrics](
       }
 
   /** Synchronize and download any missing blocks to get to the new ones.
-    * This method will complete when all the downloads are ready. */
+    * This method will in itself not block on the results, just return a
+    * list of deferred handles that the caller can decide to wait upon,
+    * which some uses cases do, but mostly we expect to let them complete
+    * asynchronously in the background. */
   private def sync(
       source: Node,
       newBlockHashes: Set[ByteString],
       skipRelaying: Boolean
-  ): F[Either[SyncError, Unit]] = {
-    def logSyncError(syncError: SyncError): F[Unit] = {
-      val prefix  = s"Failed to sync DAG, source: ${source.show}."
+  ): F[Either[SyncError, Vector[WaitHandle[F]]]] = {
+    def logSyncError(syncError: SyncError) = {
+      val prefix  = s"Failed to sync DAG, source: ${source.show -> "peer"}."
       val message = syncError.getMessage
-      Log[F].warn(s"$prefix $message")
+      Log[F].warn(s"$prefix $message").as(syncError.asLeft)
     }
 
-    val trySync = for {
+    val trySync: F[Either[SyncError, Vector[WaitHandle[F]]]] = for {
       _ <- Log[F].info(
-            s"Received notification about ${newBlockHashes.size} new blocks from ${source.show}."
+            s"Received notification about ${newBlockHashes.size} new block(s) from ${source.show -> "peer"}: ${newBlockHashes
+              .map(Utils.hex)
+              .mkString(", ") -> "blocks"}"
           )
-      dagOrError <- synchronizer.syncDag(
+      errorOrDag <- synchronizer.syncDag(
                      source = source,
                      targetBlockHashes = newBlockHashes
                    )
-      _ <- dagOrError.fold(
-            syncError => logSyncError(syncError), { dag =>
-              for {
-                _ <- Log[F].info(s"Syncing ${dag.size} blocks with ${source.show}...")
-                _ <- consensus.onPending(dag)
-                watches <- dag.traverse { summary =>
-                            downloadManager.scheduleDownload(
-                              summary,
-                              source = source,
-                              relay = !skipRelaying && newBlockHashes(summary.blockHash)
-                            )
-                          }
-                _ <- (dag zip watches).parTraverse {
-                      case (summary, watch) =>
-                        // TODO: Called from here the consensus engine can be notified multiple times.
-                        // The pending and final notifications should most likely be moved
-                        // to the DownloadManager. We'll see this clearer when we integrate
-                        // the new gossiping machinery with Casper and the Block Strategy.
-                        watch *> consensus.onDownloaded(summary.blockHash)
-                    }
-                _ <- Log[F].info(s"Synced ${dag.size} blocks with ${source.show}.")
-              } yield ()
-            }
-          )
-    } yield dagOrError.map(_ => ())
+      errorOrWaiters <- errorOrDag.fold(
+                         syncError => logSyncError(syncError), { dag =>
+                           Log[F].info(
+                             s"Syncing ${dag.size} blocks with ${source.show -> "peer"}"
+                           ) *>
+                             dag.traverse { summary =>
+                               downloadManager.scheduleDownload(
+                                 summary,
+                                 source = source,
+                                 relay = !skipRelaying && newBlockHashes(summary.blockHash)
+                               )
+                             } map { waiters =>
+                             waiters.asRight[SyncError]
+                           }
+                         }
+                       )
+    } yield errorOrWaiters
 
     trySync.onError {
       case NonFatal(ex) =>
-        Log[F].error(s"Could not sync new blocks with ${source.show}.", ex)
+        Log[F].error(s"Could not synchronize with ${source.show -> "peer"}: $ex")
     }
   }
 
@@ -167,8 +169,8 @@ class GossipServiceServer[F[_]: Concurrent: Par: Log: Metrics](
                 val ancestors =
                   if (canGoDeeper(depth) && !knownHashes(summary.blockHash)) {
                     val ancestors =
-                      summary.getHeader.parentHashes ++
-                        summary.getHeader.justifications.map(_.latestBlockHash)
+                      summary.parentHashes ++
+                        summary.justifications.map(_.latestBlockHash)
 
                     ancestors.map(depth + 1 -> _)
                   } else {
@@ -187,10 +189,10 @@ class GossipServiceServer[F[_]: Concurrent: Par: Log: Metrics](
     }
   }
 
-  override def streamDagTipBlockSummaries(
-      request: StreamDagTipBlockSummariesRequest
-  ): Iterant[F, BlockSummary] =
-    Iterant.liftF(consensus.listTips).flatMap(Iterant.fromSeq(_))
+  override def streamLatestMessages(
+      request: StreamLatestMessagesRequest
+  ): Iterant[F, Block.Justification] =
+    Iterant.liftF(backend.latestMessages).flatMap(set => Iterant.fromSeq(set.toSeq))
 
   override def streamBlockSummaries(
       request: StreamBlockSummariesRequest
@@ -201,23 +203,24 @@ class GossipServiceServer[F[_]: Concurrent: Par: Log: Metrics](
       .flatMap(Iterant.fromIterable(_))
 
   override def getBlockChunked(request: GetBlockChunkedRequest): Iterant[F, Chunk] =
-    Iterant.resource(blockDownloadSemaphore.acquire)(_ => blockDownloadSemaphore.release) flatMap {
-      _ =>
-        Iterant.liftF {
-          backend.getBlock(request.blockHash)
-        } flatMap {
-          case Some(block) =>
-            val it = chunkIt(
-              block.toByteArray,
-              effectiveChunkSize(request.chunkSize),
-              request.acceptedCompressionAlgorithms
-            )
+    Iterant.resource(blockDownloadSemaphore.acquire)(
+      _ => blockDownloadSemaphore.release
+    ) flatMap { _ =>
+      Iterant.liftF {
+        backend.getBlock(request.blockHash)
+      } flatMap {
+        case Some(block) =>
+          val it = chunkIt(
+            block.toByteArray,
+            effectiveChunkSize(request.chunkSize),
+            request.acceptedCompressionAlgorithms
+          )
 
-            Iterant.fromIterator(it)
+          Iterant.fromIterator(it)
 
-          case None =>
-            Iterant.raiseError(NotFound.block(request.blockHash))
-        }
+        case None =>
+          Iterant.raiseError(NotFound.block(request.blockHash))
+      }
     }
 
   override def getGenesisCandidate(request: GetGenesisCandidateRequest): F[GenesisCandidate] =
@@ -225,6 +228,11 @@ class GossipServiceServer[F[_]: Concurrent: Par: Log: Metrics](
 
   override def addApproval(request: AddApprovalRequest): F[Unit] =
     rethrow(genesisApprover.addApproval(request.blockHash, request.getApproval)).void
+
+  override def streamDagSliceBlockSummaries(
+      request: StreamDagSliceBlockSummariesRequest
+  ): Iterant[F, BlockSummary] =
+    backend.dagTopoSort(request.startRank.toLong, request.endRank.toLong)
 
   private def effectiveChunkSize(chunkSize: Int): Int =
     if (0 < chunkSize && chunkSize < maxChunkSize) chunkSize
@@ -269,45 +277,36 @@ object GossipServiceServer {
     Iterator(Chunk().withHeader(header)) ++ chunks
   }
 
-  /** Interface to local storage. */
+  /** Interface to storage and consensus. */
   trait Backend[F[_]] {
     def hasBlock(blockHash: ByteString): F[Boolean]
     def getBlockSummary(blockHash: ByteString): F[Option[BlockSummary]]
     def getBlock(blockHash: ByteString): F[Option[Block]]
+
+    /** Returns latest messages as seen currently by the node.
+      * NOTE: In the future we will remove redundant messages. */
+    def latestMessages: F[Set[Block.Justification]]
+
+    /* Retrieve the DAG slice in topological order, inclusive */
+    def dagTopoSort(startRank: Long, endRank: Long): Iterant[F, BlockSummary]
   }
 
-  /** Interface to the consensus engine. These could be exposed as Observables. */
-  trait Consensus[F[_]] {
-
-    /** Notify about new blocks we were told about but haven't acquired yet.
-      * Pass them in topological order. */
-    def onPending(dag: Vector[BlockSummary]): F[Unit]
-
-    /** Notify about a new block we downloaded, verified and stored. */
-    def onDownloaded(blockHash: ByteString): F[Unit]
-
-    /** Retrieve the current tips of the DAG, the ones we'd build a block on. */
-    def listTips: F[Seq[BlockSummary]]
-  }
-
-  def apply[F[_]: Concurrent: Par: Log: Metrics](
+  def apply[F[_]: Concurrent: Parallel: Log: Metrics](
       backend: GossipServiceServer.Backend[F],
       synchronizer: Synchronizer[F],
       downloadManager: DownloadManager[F],
-      consensus: Consensus[F],
       genesisApprover: GenesisApprover[F],
       maxChunkSize: Int,
       maxParallelBlockDownloads: Int
   ): F[GossipServiceServer[F]] =
-    Semaphore[F](maxParallelBlockDownloads.toLong) map { blockDownloadSemaphore =>
-      new GossipServiceServer(
-        backend,
-        synchronizer,
-        downloadManager,
-        consensus,
-        genesisApprover,
-        maxChunkSize,
-        blockDownloadSemaphore
-      )
-    }
+    for {
+      blockDownloadSemaphore <- Semaphore[F](maxParallelBlockDownloads.toLong)
+    } yield new GossipServiceServer(
+      backend,
+      synchronizer,
+      downloadManager,
+      genesisApprover,
+      maxChunkSize,
+      blockDownloadSemaphore
+    )
 }

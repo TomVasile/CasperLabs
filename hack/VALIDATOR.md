@@ -118,7 +118,6 @@ The node will listen on multiple ports; the following are the default values, yo
 * `--server-kademila-port 40404`: Intra node communication port for node discovery.
 
 Further options include:
-* `--server-use-gossiping`: Turn on more efficient intra-node communications stack.
 * `--grpc-use-tls`: Use TLS encryption on the API endpoints used for sending deploys and proposing blocks.
 
 When the `--grpc-use-tls` option is turned on, the `casperlabs-client` needs the `--node-id` option set to the value of the Keccak256 hash of the public key of the node. This is the same value as `NODE_ID`, so as a validator this information can be given to other nodes as well as dApp developers.
@@ -130,9 +129,6 @@ openssl s_client -showcerts -connect localhost:40401 </dev/null 2>/dev/null \
   | openssl x509 -outform PEM \
   > node.crt
 ```
-
-You can run the code snippet that [generated](VALIDATOR.md#secp256r1) the `NODE_ID` on that file to compute the hash.
-
 
 ### Configure auto-proposal
 

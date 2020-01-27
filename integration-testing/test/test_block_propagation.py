@@ -1,17 +1,20 @@
 import threading
-from test.cl_node.docker_node import DockerNode
+from casperlabs_local_net.docker_node import DockerNode
 from typing import List
 import pytest
 import logging
-from .cl_node.casperlabs_network import ThreeNodeNetwork, CustomConnectionNetwork
-from .cl_node.common import extract_block_hash_from_propose_output
-from .cl_node.wait import (
+from casperlabs_local_net.casperlabs_network import (
+    ThreeNodeNetwork,
+    CustomConnectionNetwork,
+)
+from casperlabs_local_net.common import extract_block_hash_from_propose_output, Contract
+from casperlabs_local_net.wait import (
     wait_for_genesis_block,
     wait_for_block_hash_propagated_to_all_nodes,
     wait_for_block_hashes_propagated_to_all_nodes,
     wait_for_peers_count_exactly,
 )
-from test.cl_node.casperlabs_accounts import Account, GENESIS_ACCOUNT
+from casperlabs_local_net.casperlabs_accounts import Account, GENESIS_ACCOUNT
 
 
 class DeployThread(threading.Thread):
@@ -36,7 +39,6 @@ class DeployThread(threading.Thread):
             for contract in batch:
                 deploy_response = self.node.client.deploy(
                     session_contract=contract,
-                    payment_contract=contract,
                     from_address=self.account.public_key_hex,
                     public_key=self.account.public_key_path,
                     private_key=self.account.private_key_path,
@@ -67,14 +69,14 @@ def nodes(docker_client_fixture):
 
 @pytest.mark.parametrize(
     "contract_paths, expected_number_of_blocks",
-    [([["test_helloname.wasm"], ["test_helloworld.wasm"]], 7)],
+    [([[Contract.HELLO_NAME_DEFINE], [Contract.HELLO_NAME_CALL]], 7)],
 )
 def test_block_propagation(
     nodes, contract_paths: List[List[str]], expected_number_of_blocks
 ):
     """
     Feature file: consensus.feature
-    Scenario: test_helloworld.wasm deploy and propose by all nodes and stored in all nodes blockstorages
+    Scenario: hello_name_call.wasm deploy and propose by all nodes and stored in all nodes blockstorages
     """
 
     account = nodes[0].genesis_account
@@ -94,14 +96,12 @@ def test_block_propagation(
     wait_for_block_hashes_propagated_to_all_nodes(nodes, deployed_block_hashes)
 
 
-def deploy_and_propose(node, contract, nonce=None):
+def deploy_and_propose(node, contract):
     deploy_output = node.client.deploy(
         from_address=GENESIS_ACCOUNT.public_key_hex,
         public_key=GENESIS_ACCOUNT.public_key_path,
         private_key=GENESIS_ACCOUNT.private_key_path,
         session_contract=contract,
-        payment_contract=contract,
-        nonce=nonce,
     )
     if type(deploy_output) == str:
         assert "Success" in deploy_output
@@ -142,7 +142,7 @@ def test_blocks_infect_network(not_all_connected_directly_nodes):
         not_all_connected_directly_nodes[-1],
     )
 
-    block_hash = deploy_and_propose(first, "test_helloname.wasm")
+    block_hash = deploy_and_propose(first, Contract.HELLO_NAME_DEFINE)
     wait_for_block_hash_propagated_to_all_nodes([last], block_hash)
 
 
@@ -161,7 +161,7 @@ def four_nodes_network(docker_client_fixture):
         yield network
 
 
-C = ["test_helloname.wasm", "test_mailinglistdefine.wasm", "test_helloworld.wasm"]
+C = [Contract.HELLO_NAME_DEFINE, Contract.MAILING_LIST_DEFINE, Contract.HELLO_NAME_CALL]
 
 
 def test_network_partition_and_rejoin(four_nodes_network):
@@ -201,9 +201,10 @@ def test_network_partition_and_rejoin(four_nodes_network):
     # and the 1 block proposed in its partition.
     # Using the same nonce in both partitions because otherwise one of them will
     # sit there unable to propose; should use separate accounts really.
+    # TODO Change to multiple accounts
     block_hashes = (
-        deploy_and_propose(partitions[0][0], C[0], nonce=2),
-        deploy_and_propose(partitions[1][0], C[1], nonce=2),
+        deploy_and_propose(partitions[0][0], C[0]),
+        deploy_and_propose(partitions[1][0], C[1]),
     )
 
     for partition, block_hash in zip(partitions, block_hashes):
@@ -225,7 +226,7 @@ def test_network_partition_and_rejoin(four_nodes_network):
     # however, nodes in partition[0] will still not see blocks from partition[1]
     # until they also propose a new one on top of the block the created during
     # the network outage.
-    block_hash = deploy_and_propose(nodes[0], C[2], nonce=3)
+    block_hash = deploy_and_propose(nodes[0], C[2])
 
     for partition, old_hash in zip(partitions, block_hashes):
         logging.info(f"CHECK {partition} HAS ALL BLOCKS CREATED IN BOTH PARTITIONS")

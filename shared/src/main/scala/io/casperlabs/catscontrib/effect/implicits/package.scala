@@ -4,12 +4,17 @@ import cats._
 import cats.data.EitherT
 import cats.effect.ExitCase.{Completed, Error}
 import cats.effect._
+import io.casperlabs.catscontrib.{FiberSyntax, MonadThrowable}
 import monix.eval.{Task, TaskLift}
 
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
+import io.casperlabs.shared.Log
 
 package object implicits {
+
+  implicit def fiberSyntax[A, F[_]: Concurrent: Log: MonadThrowable](fa: F[A]): FiberSyntax[F, A] =
+    new FiberSyntax(fa)
 
   implicit val syncId: Sync[Id] =
     new Sync[Id] {
@@ -80,7 +85,7 @@ package object implicits {
   }
 
   implicit def taskLiftEitherT[F[_]: TaskLift: Functor, E] = new TaskLift[EitherT[F, E, ?]] {
-    override def taskLift[A](task: Task[A]): EitherT[F, E, A] =
-      EitherT.liftF(TaskLift[F].taskLift(task))
+    override def apply[A](task: Task[A]): EitherT[F, E, A] =
+      EitherT.liftF[F, E, A](TaskLift[F].apply(task))
   }
 }

@@ -1,13 +1,18 @@
 package io.casperlabs.casper.util
 
 import cats.implicits._
-import cats.{Eq, Eval, Monad, Show}
-import io.casperlabs.blockstorage.{BlockMetadata, BlockStorage, DagRepresentation}
+import cats.data.NonEmptyList
+import cats.{Eq, Eval, Monad}
+import com.google.protobuf.ByteString
 import io.casperlabs.casper.Estimator.BlockHash
+import io.casperlabs.casper.consensus.{Block, BlockSummary}
 import io.casperlabs.casper.PrettyPrinter
-import io.casperlabs.casper.consensus.Block
+import io.casperlabs.casper.util.implicits._
 import io.casperlabs.catscontrib.MonadThrowable
-import io.casperlabs.shared.StreamT
+import io.casperlabs.models.Message
+import io.casperlabs.shared.{Log, StreamT}
+import io.casperlabs.storage.block.BlockStorage
+import io.casperlabs.storage.dag.DagRepresentation
 import simulacrum.typeclass
 
 import scala.collection.immutable.{BitSet, HashSet, Queue}
@@ -28,10 +33,48 @@ object DagOperations {
       type K = B
       def key(a: A) = k(a)
     }
-    def identity[A]               = instance[A, A](a => a)
-    implicit val blockKey         = instance[Block, BlockHash](_.blockHash)
-    implicit val blockMetadataKey = instance[BlockMetadata, BlockHash](_.blockHash)
-    implicit val blockHashKey     = identity[BlockHash]
+    def identity[A]                = instance[A, A](a => a)
+    implicit val blockKey          = instance[Block, BlockHash](_.blockHash)
+    implicit val blockSummaryKey   = instance[BlockSummary, BlockHash](_.blockHash)
+    implicit val messageSummaryKey = instance[Message, BlockHash](_.messageHash)
+    implicit val blockHashKey      = identity[BlockHash]
+  }
+
+  /** Starts from the list of messages and follows their justifications,
+    * sorting them by their rank value.
+    *
+    * Returns a stream.
+    */
+  def toposortJDagDesc[F[_]: Monad](
+      dag: DagRepresentation[F],
+      msgs: List[Message]
+  ): StreamT[F, Message] = {
+    implicit val blockTopoOrdering: Ordering[Message] = DagOperations.blockTopoOrderingDesc
+    DagOperations.bfToposortTraverseF(
+      msgs
+    )(
+      _.justifications.toList
+        .traverse(j => dag.lookup(j.latestBlockHash))
+        .map(_.flatten)
+    )
+  }
+
+  /** Traverses j-past-cone of the block and returns messages by specified validator.
+    */
+  def swimlaneV[F[_]: Monad](
+      validator: ByteString,
+      message: Message,
+      dag: DagRepresentation[F]
+  ): StreamT[F, Message] = {
+    // Messages visible in the direct justifications of the block.
+    val messagePanorama =
+      message.justifications.toList.traverse(j => dag.lookup(j.latestBlockHash)).map(_.flatten)
+    val tail = StreamT.lift(messagePanorama).flatMap { jTips =>
+      toposortJDagDesc[F](dag, jTips).filter(_.validatorId == validator)
+    }
+    if (message.validatorId == validator) {
+      StreamT.pure[F, Message](message) ++ tail
+    } else tail
   }
 
   def bfTraverseF[F[_]: Monad, A](
@@ -55,34 +98,67 @@ object DagOperations {
     StreamT.delay(Eval.now(build(Queue.empty[A].enqueue[A](start), HashSet.empty[k.K])))
   }
 
-  val blockTopoOrderingAsc: Ordering[BlockMetadata] =
-    Ordering.by[BlockMetadata, Long](_.rank).reverse
+  val longByteStringOrdering: Ordering[(Long, ByteString)] =
+    Ordering.fromLessThan[(Long, ByteString)] {
+      case (a, b) =>
+        if (a._1 < b._1) true
+        else if (b._1 < a._1) false
+        else {
+          val aStr = a._2.toStringUtf8
+          val bStr = b._2.toStringUtf8
+          if (aStr < bStr) true
+          else if (bStr < aStr) false
+          else true
+        }
+    }
 
-  val blockTopoOrderingDesc: Ordering[BlockMetadata] = Ordering.by(_.rank)
+  val bigIntByteStringOrdering: Ordering[(BigInt, ByteString)] =
+    Ordering.fromLessThan[(BigInt, ByteString)] {
+      case (a, b) =>
+        if (a._1 < b._1) true
+        else if (b._1 < a._1) false
+        else {
+          val aStr = a._2.toStringUtf8
+          val bStr = b._2.toStringUtf8
+          if (aStr < bStr) true
+          else if (bStr < aStr) false
+          else true
+        }
+    }
+
+  val blockTopoOrderingAsc: Ordering[Message] =
+    Ordering
+      .by[Message, (Long, ByteString)](m => (m.rank, m.messageHash))(longByteStringOrdering)
+      .reverse
+
+  val blockTopoOrderingDesc: Ordering[Message] =
+    Ordering.by[Message, (Long, ByteString)](m => (m.rank, m.messageHash))(longByteStringOrdering)
 
   def bfToposortTraverseF[F[_]: Monad](
-      start: List[BlockMetadata]
+      start: List[Message]
   )(
-      neighbours: BlockMetadata => F[List[BlockMetadata]]
-  )(implicit ord: Ordering[BlockMetadata]): StreamT[F, BlockMetadata] = {
+      neighbours: Message => F[List[Message]]
+  )(implicit ord: Ordering[Message]): StreamT[F, Message] = {
     def build(
-        q: mutable.PriorityQueue[BlockMetadata],
+        q: mutable.PriorityQueue[Message],
         prevVisited: HashSet[BlockHash]
-    ): F[StreamT[F, BlockMetadata]] =
-      if (q.isEmpty) StreamT.empty[F, BlockMetadata].pure[F]
+    ): F[StreamT[F, Message]] =
+      if (q.isEmpty) StreamT.empty[F, Message].pure[F]
       else {
         val curr = q.dequeue
-        if (prevVisited(curr.blockHash)) build(q, prevVisited)
+        if (prevVisited(curr.messageHash)) build(q, prevVisited)
         else
           for {
             ns      <- neighbours(curr)
-            visited = prevVisited + curr.blockHash
-            newQ    = q ++ ns.filterNot(b => visited(b.blockHash))
+            visited = prevVisited + curr.messageHash
+            newQ    = q ++ ns.filterNot(b => visited(b.messageHash))
           } yield StreamT.cons(curr, Eval.always(build(newQ, visited)))
       }
 
     StreamT.delay(
-      Eval.now(build(mutable.PriorityQueue.empty[BlockMetadata] ++ start, HashSet.empty[BlockHash]))
+      Eval.now(
+        build(mutable.PriorityQueue.empty[Message] ++ start, HashSet.empty[BlockHash])
+      )
     )
   }
 
@@ -237,15 +313,15 @@ object DagOperations {
   }
 
   def uncommonAncestors[F[_]: Monad](
-      blocks: IndexedSeq[BlockMetadata],
+      blocks: IndexedSeq[Message],
       dag: DagRepresentation[F]
   )(
-      implicit topoSort: Ordering[BlockMetadata]
-  ): F[Map[BlockMetadata, BitSet]] = {
-    def parents(b: BlockMetadata): F[List[BlockMetadata]] =
-      b.parents.traverse(b => dag.lookup(b).map(_.get))
+      implicit topoSort: Ordering[Message]
+  ): F[Map[Message, BitSet]] = {
+    def parents(b: Message): F[List[Message]] =
+      b.parents.toList.traverse(b => dag.lookup(b).map(_.get))
 
-    abstractUncommonAncestors[F, BlockMetadata](blocks, parents)
+    abstractUncommonAncestors[F, Message](blocks, parents)
   }
 
   //Conceptually, the GCA is the first point at which the histories of b1 and b2 diverge.
@@ -290,9 +366,6 @@ object DagOperations {
       } yield gca.get
     }
 
-  private def missingDependencyError[A: Show](a: A): Throwable =
-    new IllegalStateException(s"Missing ${Show[A].show(a)} dependency.")
-
   /** Computes Latest Common Ancestor of two elements.
     */
   def latestCommonAncestorF[F[_]: MonadThrowable, A: Eq: Ordering](
@@ -303,7 +376,7 @@ object DagOperations {
       a.pure[F]
     } else {
       Ordering[A].compare(a, b) match {
-        case -1 =>
+        case x if x < 0 =>
           // Block `b` is "higher" in the chain
           next(b).flatMap(latestCommonAncestorF(a, _)(next))
         case 0 =>
@@ -313,7 +386,7 @@ object DagOperations {
             bb  <- next(b)
             lca <- latestCommonAncestorF(aa, bb)(next)
           } yield lca
-        case 1 =>
+        case x if x > 0 =>
           next(a).flatMap(latestCommonAncestorF(b, _)(next))
       }
     }
@@ -321,7 +394,7 @@ object DagOperations {
   /** Computes Latest Common Ancestor of the set of elements.
     */
   def latestCommonAncestorF[F[_]: MonadThrowable, A: Eq: Ordering](
-      starters: List[A]
+      starters: NonEmptyList[A]
   )(next: A => F[A]): F[A] =
     starters.foldLeftM(starters.head)(latestCommonAncestorF(_, _)(next))
 
@@ -335,22 +408,29 @@ object DagOperations {
     */
   def latestCommonAncestorsMainParent[F[_]: MonadThrowable](
       dag: DagRepresentation[F],
-      starters: List[BlockHash]
-  ): F[BlockHash] = {
+      starters: NonEmptyList[BlockHash]
+  ): F[Message] = {
     implicit val blocksOrdering = DagOperations.blockTopoOrderingDesc
-    import io.casperlabs.casper.util.implicits.{eqBlockMetadata, showBlockHash}
-    def lookup[A](f: A => BlockHash): A => F[BlockMetadata] =
-      el =>
-        dag
-          .lookup(f(el))
-          .flatMap(MonadThrowable[F].fromOption(_, missingDependencyError(f(el))))
+    import io.casperlabs.casper.util.implicits.eqMessageSummary
+
+    def lookup(hash: BlockHash): F[Message] =
+      dag
+        .lookup(hash)
+        .flatMap(
+          MonadThrowable[F].fromOption(
+            _,
+            new IllegalStateException(s"Missing dependency: ${PrettyPrinter.buildString(hash)}")
+          )
+        )
 
     starters
-      .traverse(lookup(identity))
-      .flatMap(
-        latestCommonAncestorF[F, BlockMetadata](_)(lookup[BlockMetadata](_.parents.head)(_))
-      )
-      .map(_.blockHash)
+      .traverse(lookup)
+      .flatMap {
+        latestCommonAncestorF[F, Message](_) { block =>
+          // Genesis doesn't have parents, so just return itself until it's recognised as LCA.
+          block.parents.headOption.fold(block.pure[F])(lookup)
+        }
+      }
   }
 
   /** Check if there's a (possibly empty) path leading from any of the starting points to any of the targets. */
@@ -360,7 +440,9 @@ object DagOperations {
   )(neighbours: A => F[List[A]])(
       implicit k: Key[A]
   ): F[Boolean] =
-    bfTraverseF[F, A](start.toList)(neighbours).find(targets).map(_.nonEmpty)
+    if (targets.isEmpty || start.isEmpty) false.pure[F]
+    else
+      bfTraverseF[F, A](start.toList)(neighbours).find(targets).map(_.nonEmpty)
 
   /** Check if a path in the p-DAG exists from ancestors to descendants (or self). */
   def anyDescendantPathExists[F[_]: MonadThrowable](
@@ -377,23 +459,25 @@ object DagOperations {
       dag: DagRepresentation[F],
       ancestors: Set[BlockHash],
       descendants: Set[BlockHash]
-  ): F[Set[BlockHash]] = {
-    // Traverse backwards rank by rank until we either visit all ancestors or go beyond the oldest.
-    implicit val ord = blockTopoOrderingDesc
-    for {
-      ancestorMeta   <- ancestors.toList.traverse(dag.lookup).map(_.flatten)
-      descendantMeta <- descendants.toList.traverse(dag.lookup).map(_.flatten)
-      minRank        = if (ancestorMeta.isEmpty) 0 else ancestorMeta.map(_.rank).min
-      reachable <- bfToposortTraverseF[F](descendantMeta) { blockMeta =>
-                    blockMeta.parents.traverse(dag.lookup).map(_.flatten)
-                  }.foldWhileLeft(Set.empty[BlockHash]) {
-                    case (reachable, blockMeta) if ancestors(blockMeta.blockHash) =>
-                      Left(reachable + blockMeta.blockHash)
-                    case (reachable, blockMeta) if blockMeta.rank >= minRank =>
-                      Left(reachable)
-                    case (reachable, _) =>
-                      Right(reachable)
-                  }
-    } yield reachable
-  }
+  ): F[Set[BlockHash]] =
+    if (ancestors.isEmpty || descendants.isEmpty) Set.empty[BlockHash].pure[F]
+    else {
+      // Traverse backwards rank by rank until we either visit all ancestors or go beyond the oldest.
+      implicit val ord = blockTopoOrderingDesc
+      for {
+        ancestorMeta   <- ancestors.toList.traverse(dag.lookup).map(_.flatten)
+        descendantMeta <- descendants.toList.traverse(dag.lookup).map(_.flatten)
+        minRank        = if (ancestorMeta.isEmpty) 0 else ancestorMeta.map(_.rank).min
+        reachable <- bfToposortTraverseF[F](descendantMeta) { blockMeta =>
+                      blockMeta.parents.toList.traverse(dag.lookup).map(_.flatten)
+                    }.foldWhileLeft(Set.empty[BlockHash]) {
+                      case (reachable, msgSummary) if ancestors(msgSummary.messageHash) =>
+                        Left(reachable + msgSummary.messageHash)
+                      case (reachable, blockMeta) if blockMeta.rank >= minRank =>
+                        Left(reachable)
+                      case (reachable, _) =>
+                        Right(reachable)
+                    }
+      } yield reachable
+    }
 }

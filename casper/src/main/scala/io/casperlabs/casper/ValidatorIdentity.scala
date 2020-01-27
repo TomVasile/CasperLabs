@@ -6,7 +6,7 @@ import cats.Monad
 import cats.effect.{Resource, Sync}
 import cats.implicits._
 import com.google.protobuf.ByteString
-import io.casperlabs.casper.protocol.Signature
+import io.casperlabs.casper.consensus.Signature
 import io.casperlabs.crypto.Keys
 import io.casperlabs.crypto.codec.Base64
 import io.casperlabs.crypto.signatures.SignatureAlgorithm
@@ -22,15 +22,12 @@ final case class ValidatorIdentity(
 ) {
   def signature(data: Array[Byte]): Signature =
     Signature(
-      ByteString.copyFrom(publicKey),
       signatureAlgorithm.name,
       ByteString.copyFrom(signatureAlgorithm.sign(data, privateKey))
     )
 }
 
 object ValidatorIdentity {
-  private implicit val logSource: LogSource = LogSource(this.getClass)
-
   private def fileContent[F[_]: Sync](path: Path): F[String] =
     Resource
       .fromAutoCloseable(Sync[F].delay(Source.fromFile(path.toFile)))
@@ -49,7 +46,7 @@ object ValidatorIdentity {
             .error(s"Failed to parse keys, ${parseError.errorMessage}") >> none[ValidatorIdentity]
             .pure[F], {
           case (privateKey, publicKey, sa) =>
-            Log[F].info(s"Validator identity: ${Base64.encode(publicKey)}") >>
+            Log[F].info(s"Validator identity: ${Base64.encode(publicKey) -> "validator"}") >>
               ValidatorIdentity(publicKey, privateKey, sa).some.pure[F]
         }
       )

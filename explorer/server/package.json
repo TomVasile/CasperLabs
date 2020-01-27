@@ -12,7 +12,7 @@
     "start": "node .",
     "dev": "nodemon -e ts --watch src --exec \"npm run build && npm run start\"",
     "start:both": "concurrently \"npm run dev\" \"cd ../ui && npm start\"",
-    "test": "TS_NODE_FILES=true mocha -r ts-node/register src/**/*.test.ts"
+    "test": "TS_NODE_FILES=true mocha -r ts-node/register test/**/*.test.ts"
   },
   "author": "",
   "license": "ISC",
@@ -24,11 +24,11 @@
     "chai": "^4.2.0",
     "concurrently": "^4.1.1",
     "mocha": "^6.1.4",
-    "nodemon": "^1.19.1",
+    "nodemon": "^1.19.3",
     "nyc": "^14.1.1",
     "ts-node": "^8.3.0",
-    "tslint": "^5.18.0",
-    "typescript": "^3.5.3"
+    "tslint": "^5.20.0",
+    "typescript": "^3.7.3"
   },
   "dependencies": {
     "@improbable-eng/grpc-web": "^0.9.6",
@@ -38,6 +38,8 @@
     "@types/express-jwt": "0.0.42",
     "@types/google-protobuf": "^3.7.1",
     "blakejs": "^1.1.0",
+    "casperlabs-grpc": "file:../grpc",
+    "casperlabs-sdk": "file:../sdk",
     "command-line-args": "^5.1.1",
     "dotenv": "^8.0.0",
     "express": "^4.17.1",

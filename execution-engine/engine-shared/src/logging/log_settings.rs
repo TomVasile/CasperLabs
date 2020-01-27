@@ -1,6 +1,9 @@
-use std::process;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    process,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
+use lazy_static::lazy_static;
 use serde::Serialize;
 
 use crate::logging::log_level::*;
@@ -269,9 +272,9 @@ lazy_static! {
 }
 
 fn get_hostname() -> String {
-    match hostname::get_hostname() {
-        Some(h) => h.to_string(),
-        None => "unknown-host".to_owned(),
+    match hostname::get() {
+        Ok(hostname) => hostname.to_string_lossy().to_string(),
+        Err(_) => "unknown-host".to_owned(),
     }
 }
 

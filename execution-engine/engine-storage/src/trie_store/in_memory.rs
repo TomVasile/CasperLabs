@@ -3,16 +3,13 @@
 //! # Usage
 //!
 //! ```
-//! # extern crate casperlabs_engine_storage;
-//! # extern crate contract_ffi;
-//! # extern crate engine_shared;
 //! use casperlabs_engine_storage::store::Store;
 //! use casperlabs_engine_storage::transaction_source::{Transaction, TransactionSource};
 //! use casperlabs_engine_storage::transaction_source::in_memory::InMemoryEnvironment;
 //! use casperlabs_engine_storage::trie::{Pointer, PointerBlock, Trie};
 //! use casperlabs_engine_storage::trie_store::TrieStore;
 //! use casperlabs_engine_storage::trie_store::in_memory::InMemoryTrieStore;
-//! use contract_ffi::bytesrepr::ToBytes;
+//! use types::bytesrepr::ToBytes;
 //! use engine_shared::newtypes::Blake2bHash;
 //!
 //! // Create some leaves
@@ -101,12 +98,10 @@
 //! }
 //! ```
 
-use contract_ffi::bytesrepr::{FromBytes, ToBytes};
-
 use super::*;
-use crate::error::in_memory::Error;
-use crate::transaction_source::in_memory::InMemoryEnvironment;
-use crate::trie_store;
+use crate::{
+    error::in_memory::Error, transaction_source::in_memory::InMemoryEnvironment, trie_store,
+};
 
 /// An in-memory trie store.
 pub struct InMemoryTrieStore {
@@ -124,11 +119,7 @@ impl InMemoryTrieStore {
     }
 }
 
-impl<K, V> Store<Blake2bHash, Trie<K, V>> for InMemoryTrieStore
-where
-    K: ToBytes + FromBytes,
-    V: ToBytes + FromBytes,
-{
+impl<K, V> Store<Blake2bHash, Trie<K, V>> for InMemoryTrieStore {
     type Error = Error;
 
     type Handle = Option<String>;
@@ -138,9 +129,4 @@ where
     }
 }
 
-impl<K, V> TrieStore<K, V> for InMemoryTrieStore
-where
-    K: ToBytes + FromBytes,
-    V: ToBytes + FromBytes,
-{
-}
+impl<K, V> TrieStore<K, V> for InMemoryTrieStore {}

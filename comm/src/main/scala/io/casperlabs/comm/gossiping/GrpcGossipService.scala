@@ -1,12 +1,14 @@
 package io.casperlabs.comm.gossiping
 
-import cats._
 import cats.effect._
 import cats.implicits._
+import com.google.protobuf.ByteString
 import com.google.protobuf.empty.Empty
-import io.casperlabs.casper.consensus.{BlockSummary, GenesisCandidate}
+import io.casperlabs.casper.consensus.{Block, BlockSummary, GenesisCandidate}
 import io.casperlabs.comm.ServiceError.{DeadlineExceeded, Unauthenticated}
 import io.casperlabs.comm.auth.Principal
+import io.casperlabs.comm.discovery.{Node, NodeIdentifier}
+import io.casperlabs.comm.gossiping.Utils.hex
 import io.casperlabs.comm.grpc.ContextKeys
 import io.casperlabs.shared.ObservableOps._
 import monix.eval.{Task, TaskLift, TaskLike}
@@ -14,7 +16,7 @@ import monix.reactive.Observable
 import monix.tail.Iterant
 
 import scala.concurrent.TimeoutException
-import scala.concurrent.duration.{Duration, FiniteDuration}
+import scala.concurrent.duration._
 
 /** Adapt the GossipService to Monix generated interfaces. */
 object GrpcGossipService {
@@ -24,39 +26,53 @@ object GrpcGossipService {
     * to be used as the "server side", i.e. to return data to another peer. */
   def fromGossipService[F[_]: Sync: TaskLike: ObservableIterant](
       service: GossipService[F],
+      rateLimiter: RateLimiter[F, ByteString],
+      chainId: ByteString,
       blockChunkConsumerTimeout: FiniteDuration
   ): GossipingGrpcMonix.GossipService =
     new GossipingGrpcMonix.GossipService {
 
-      /** Handle notification about some new blocks on the caller. */
-      def newBlocks(request: NewBlocksRequest): Task[NewBlocksResponse] =
-        // Verify that the sender holds the same node identity as the public key
-        // in the client SSL certificate. Alternatively we could drop the sender
-        // altogether and use Kademlia to lookup the Node with that ID the first
-        // time we see it.
-        (request.sender, Option(ContextKeys.Principal.get)) match {
-          case (None, _) =>
-            Task.raiseError(Unauthenticated("Sender cannot be empty."))
-
+      /**
+        * Verifies that the sender holds the same node identity as the public key in the client SSL certificate.
+        */
+      private def verifySender(
+          maybeSender: Option[Node]
+      ): Task[NodeIdentifier] =
+        (maybeSender, Option(ContextKeys.Principal.get)) match {
           case (_, None) =>
-            Task.raiseError(Unauthenticated("Cannot verify sender identity."))
+            Task.raiseError[NodeIdentifier](
+              Unauthenticated("Cannot verify sender identity.")
+            )
+
+          case (Some(sender), _) if sender.chainId != chainId =>
+            Task.raiseError[NodeIdentifier](
+              Unauthenticated(
+                s"Sender doesn't match chain id, expected: ${hex(chainId)}, received: ${hex(sender.chainId)}"
+              )
+            )
 
           case (Some(sender), Some(Principal.Peer(id))) if sender.id != id =>
-            Task.raiseError(Unauthenticated("Sender doesn't match public key."))
+            Task.raiseError[NodeIdentifier](
+              Unauthenticated("Sender doesn't match public key.")
+            )
 
-          case (Some(_), Some(Principal.Peer(_))) =>
-            TaskLike[F].toTask(service.newBlocks(request))
+          case (_, Some(Principal.Peer(id))) =>
+            Task.now(NodeIdentifier(id))
         }
+
+      /** Handle notification about some new blocks on the caller. */
+      def newBlocks(request: NewBlocksRequest): Task[NewBlocksResponse] =
+        verifySender(request.sender) >> TaskLike[F].apply(service.newBlocks(request))
 
       def streamAncestorBlockSummaries(
           request: StreamAncestorBlockSummariesRequest
       ): Observable[BlockSummary] =
         service.streamAncestorBlockSummaries(request).toObservable
 
-      def streamDagTipBlockSummaries(
-          request: StreamDagTipBlockSummariesRequest
-      ): Observable[BlockSummary] =
-        service.streamDagTipBlockSummaries(request).toObservable
+      override def streamLatestMessages(
+          request: StreamLatestMessagesRequest
+      ): Observable[Block.Justification] =
+        service.streamLatestMessages(request).toObservable
 
       def streamBlockSummaries(
           request: StreamBlockSummariesRequest
@@ -64,20 +80,34 @@ object GrpcGossipService {
         service.streamBlockSummaries(request).toObservable
 
       def getBlockChunked(request: GetBlockChunkedRequest): Observable[Chunk] =
-        service
-          .getBlockChunked(request)
-          .toObservable
-          .withConsumerTimeout(blockChunkConsumerTimeout)
-          .onErrorRecoverWith {
-            case ex: TimeoutException =>
-              Observable.raiseError(DeadlineExceeded(ex.getMessage))
-          }
+        Observable
+          .fromTask(verifySender(maybeSender = None)) >>= { sender =>
+          val stream = service
+            .getBlockChunked(request)
+            .toObservable
+            .withConsumerTimeout(blockChunkConsumerTimeout)
+            .onErrorRecoverWith {
+              case ex: TimeoutException =>
+                Observable.raiseError(DeadlineExceeded(ex.getMessage))
+            }
+
+          Observable
+            .fromTask(
+              TaskLike[F]
+                .apply(rateLimiter.await(sender.asByteString, stream.pure[F]))
+            )
+            .flatten
+        }
 
       def getGenesisCandidate(request: GetGenesisCandidateRequest): Task[GenesisCandidate] =
-        TaskLike[F].toTask(service.getGenesisCandidate(request))
+        TaskLike[F].apply(service.getGenesisCandidate(request))
 
       def addApproval(request: AddApprovalRequest): Task[Empty] =
-        TaskLike[F].toTask(service.addApproval(request).map(_ => Empty()))
+        TaskLike[F].apply(service.addApproval(request).map(_ => Empty()))
+
+      def streamDagSliceBlockSummaries(
+          request: StreamDagSliceBlockSummariesRequest
+      ): Observable[BlockSummary] = service.streamDagSliceBlockSummaries(request).toObservable
     }
 
   /** Create the internal interface from the Monix specific instance,
@@ -108,10 +138,10 @@ object GrpcGossipService {
       ): Iterant[F, BlockSummary] =
         withErrorCallback(stub.streamAncestorBlockSummaries(request))
 
-      def streamDagTipBlockSummaries(
-          request: StreamDagTipBlockSummariesRequest
-      ): Iterant[F, BlockSummary] =
-        withErrorCallback(stub.streamDagTipBlockSummaries(request))
+      override def streamLatestMessages(
+          request: StreamLatestMessagesRequest
+      ): Iterant[F, Block.Justification] =
+        withErrorCallback(stub.streamLatestMessages(request))
 
       def streamBlockSummaries(
           request: StreamBlockSummariesRequest
@@ -126,5 +156,9 @@ object GrpcGossipService {
 
       def addApproval(request: AddApprovalRequest): F[Unit] =
         withErrorCallback(stub.addApproval(request).map(_ => ()))
+
+      def streamDagSliceBlockSummaries(
+          request: StreamDagSliceBlockSummariesRequest
+      ): Iterant[F, BlockSummary] = withErrorCallback(stub.streamDagSliceBlockSummaries(request))
     }
 }
