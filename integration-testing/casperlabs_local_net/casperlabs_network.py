@@ -60,7 +60,6 @@ class CasperLabsNetwork:
     """
 
     grpc_encryption = False
-    auto_propose = False
     behind_proxy = False
     initial_motes = INITIAL_MOTES_AMOUNT
 
@@ -147,11 +146,12 @@ class CasperLabsNetwork:
         """
         Should be implemented with each network class to setup custom nodes and networks.
         """
-        raise NotImplementedError("Must implement '_create_network' in subclass.")
+        raise NotImplementedError("Must implement 'create_cl_network' in subclass.")
 
     def create_docker_network(self) -> str:
         with self._lock:
-            tag_name = os.environ.get("TAG_NAME") or "test"
+            tag_name = os.environ.get("TAG_NAME") or "latest"
+            tag_name += f"-{self.docker_client.cl_unique_run_num}"
             network_name = f"casperlabs_{random_string(5)}_{tag_name}"
             self._created_networks.append(network_name)
             self.docker_client.networks.create(network_name, driver="bridge")
@@ -178,7 +178,6 @@ class CasperLabsNetwork:
                 node_private_key=account.private_key,
                 node_account=account,
                 grpc_encryption=self.grpc_encryption,
-                auto_propose=self.auto_propose,
                 behind_proxy=self.behind_proxy,
             )
 
@@ -348,7 +347,6 @@ class OneNodeNetwork(CasperLabsNetwork):
             initial_motes=self.initial_motes,
             node_account=account,
             grpc_encryption=self.grpc_encryption,
-            auto_propose=self.auto_propose,
         )
         return config
 
@@ -446,9 +444,9 @@ class OneNodeWithGRPCEncryption(OneNodeNetwork):
 
 
 class OneNodeWithAutoPropose(OneNodeNetwork):
-    auto_propose = True
     # TODO: enable encryption once asyncio client's gRPC encryption fixed
     # grpc_encryption = True
+    pass
 
 
 class OneNodeWithClarity(OneNodeNetwork):
@@ -630,7 +628,7 @@ class ThreeNodeNetworkWithTwoBootstraps(CasperLabsNetwork):
 
     def _node_address(self, config):
         node_id = extract_common_name(config.tls_certificate_local_path())
-        return f"casperlabs://{node_id}@node-{config.number}-{config.rand_str}-{self._docker_tag(config)}?protocol=40400&discovery=40404"
+        return f"casperlabs://{node_id}@node-{config.number}-{config.rand_str}-{self._docker_tag(config)}-{config.unique_run_num}?protocol=40400&discovery=40404"
 
     def create_cl_network(self):
 

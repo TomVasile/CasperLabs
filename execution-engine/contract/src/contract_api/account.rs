@@ -1,37 +1,37 @@
+//! Functions for managing accounts.
+
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 
 use casperlabs_types::{
     account::{
-        ActionType, AddKeyFailure, PublicKey, PurseId, RemoveKeyFailure, SetThresholdFailure,
-        UpdateKeyFailure, Weight, PURSE_ID_SERIALIZED_LENGTH,
+        ActionType, AddKeyFailure, PublicKey, RemoveKeyFailure, SetThresholdFailure,
+        UpdateKeyFailure, Weight,
     },
-    bytesrepr,
+    bytesrepr, URef, UREF_SERIALIZED_LENGTH,
 };
 
 use super::to_ptr;
 use crate::{contract_api, ext_ffi, unwrap_or_revert::UnwrapOrRevert};
 
-pub fn get_main_purse() -> PurseId {
-    let dest_ptr = contract_api::alloc_bytes(PURSE_ID_SERIALIZED_LENGTH);
+/// Retrieves the ID of the account's main purse.
+pub fn get_main_purse() -> URef {
+    let dest_ptr = contract_api::alloc_bytes(UREF_SERIALIZED_LENGTH);
     let bytes = unsafe {
         ext_ffi::get_main_purse(dest_ptr);
-        Vec::from_raw_parts(
-            dest_ptr,
-            PURSE_ID_SERIALIZED_LENGTH,
-            PURSE_ID_SERIALIZED_LENGTH,
-        )
+        Vec::from_raw_parts(dest_ptr, UREF_SERIALIZED_LENGTH, UREF_SERIALIZED_LENGTH)
     };
     bytesrepr::deserialize(bytes).unwrap_or_revert()
 }
 
+/// Sets the given [`ActionType`]'s threshold to the provided value.
 pub fn set_action_threshold(
-    permission_level: ActionType,
+    action_type: ActionType,
     threshold: Weight,
 ) -> Result<(), SetThresholdFailure> {
-    let permission_level = permission_level as u32;
+    let action_type = action_type as u32;
     let threshold = threshold.value().into();
-    let result = unsafe { ext_ffi::set_action_threshold(permission_level, threshold) };
+    let result = unsafe { ext_ffi::set_action_threshold(action_type, threshold) };
     if result == 0 {
         Ok(())
     } else {
@@ -39,11 +39,13 @@ pub fn set_action_threshold(
     }
 }
 
-/// Adds a public key with associated weight to an account.
+/// Adds the given [`PublicKey`] with associated [`Weight`] to the account's associated keys.
 pub fn add_associated_key(public_key: PublicKey, weight: Weight) -> Result<(), AddKeyFailure> {
-    let (public_key_ptr, _public_key_size, _bytes) = to_ptr(public_key);
+    let (public_key_ptr, public_key_size, _bytes) = to_ptr(public_key);
     // Cast of u8 (weight) into i32 is assumed to be always safe
-    let result = unsafe { ext_ffi::add_associated_key(public_key_ptr, weight.value().into()) };
+    let result = unsafe {
+        ext_ffi::add_associated_key(public_key_ptr, public_key_size, weight.value().into())
+    };
     if result == 0 {
         Ok(())
     } else {
@@ -51,10 +53,10 @@ pub fn add_associated_key(public_key: PublicKey, weight: Weight) -> Result<(), A
     }
 }
 
-/// Removes a public key from associated keys on an account
+/// Removes the given [`PublicKey`] from the account's associated keys.
 pub fn remove_associated_key(public_key: PublicKey) -> Result<(), RemoveKeyFailure> {
-    let (public_key_ptr, _public_key_size, _bytes) = to_ptr(public_key);
-    let result = unsafe { ext_ffi::remove_associated_key(public_key_ptr) };
+    let (public_key_ptr, public_key_size, _bytes) = to_ptr(public_key);
+    let result = unsafe { ext_ffi::remove_associated_key(public_key_ptr, public_key_size) };
     if result == 0 {
         Ok(())
     } else {
@@ -62,14 +64,16 @@ pub fn remove_associated_key(public_key: PublicKey) -> Result<(), RemoveKeyFailu
     }
 }
 
-/// Updates the value stored under a public key associated with an account
+/// Updates the [`Weight`] of the given [`PublicKey`] in the account's associated keys.
 pub fn update_associated_key(
     public_key: PublicKey,
     weight: Weight,
 ) -> Result<(), UpdateKeyFailure> {
-    let (public_key_ptr, _public_key_size, _bytes) = to_ptr(public_key);
+    let (public_key_ptr, public_key_size, _bytes) = to_ptr(public_key);
     // Cast of u8 (weight) into i32 is assumed to be always safe
-    let result = unsafe { ext_ffi::update_associated_key(public_key_ptr, weight.value().into()) };
+    let result = unsafe {
+        ext_ffi::update_associated_key(public_key_ptr, public_key_size, weight.value().into())
+    };
     if result == 0 {
         Ok(())
     } else {

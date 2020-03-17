@@ -48,6 +48,7 @@ class DockerNode(LoggingDockerBase):
 
     NUMBER_OF_BONDS = 10
 
+    # Standard Ports of a Node
     GRPC_SERVER_PORT = 40400
     GRPC_EXTERNAL_PORT = 40401
     GRPC_INTERNAL_PORT = 40402
@@ -107,47 +108,60 @@ class DockerNode(LoggingDockerBase):
         )
 
     @property
-    def node_host(self):
-        return os.environ.get("TAG_NAME") and self.container_name or "172.17.0.1"
+    def unique_run_offset(self) -> int:
+        """ Added to port numbers to make external ports unique with parallel runs """
+        return self.config.unique_run_num * 1000
 
     @property
-    def proxy_host(self):
-        return (
-            os.environ.get("TAG_NAME")
-            and f"test-{os.environ.get('TAG_NAME')}"
-            or "172.17.0.1"
-        )
-
-    @property
-    def server_proxy_port(self) -> int:
-        return (
-            self.GRPC_SERVER_PORT + self.config.number * 100 + self.docker_port_offset
-        )
-
-    @property
-    def kademlia_proxy_port(self) -> int:
-        return self.KADEMLIA_PORT + self.config.number * 100 + self.docker_port_offset
+    def proxy_offset(self) -> int:
+        return self.config.number * 100
 
     @property
     def docker_port_offset(self) -> int:
         if self.is_in_docker:
             return 0
         else:
-            return self.config.number * 10
+            return self.config.number * 10 + self.unique_run_offset
+
+    @property
+    def behind_proxy_offset(self) -> int:
+        if self.config.behind_proxy:
+            return 10000
+        else:
+            return 0
+
+    @property
+    def docker_test_host_name(self) -> str:
+        return f"test-{os.environ.get('TAG_NAME')}-{self.config.unique_run_num}"
+
+    @property
+    def node_host(self):
+        return self.is_in_docker and self.container_name or "172.17.0.1"
+
+    @property
+    def proxy_host(self):
+        if self.is_in_docker:
+            return self.docker_test_host_name
+        else:
+            return "172.17.0.1"
+
+    @property
+    def server_proxy_port(self) -> int:
+        return self.GRPC_SERVER_PORT + self.docker_port_offset + self.proxy_offset
+
+    @property
+    def kademlia_proxy_port(self) -> int:
+        return self.KADEMLIA_PORT + self.docker_port_offset + self.proxy_offset
 
     @property
     def grpc_server_docker_port(self) -> int:
-        n = self.GRPC_SERVER_PORT + self.docker_port_offset
-        if self.config.behind_proxy:
-            return n + 10000  # 50400 + self.docker_port_offset
-        return n
+        return (
+            self.GRPC_SERVER_PORT + self.docker_port_offset + self.behind_proxy_offset
+        )
 
     @property
     def kademlia_docker_port(self) -> int:
-        n = self.KADEMLIA_PORT + self.docker_port_offset
-        if self.config.behind_proxy:
-            return n + 10000  # 50404 + self.docker_port_offset
-        return n
+        return self.KADEMLIA_PORT + self.docker_port_offset + self.behind_proxy_offset
 
     @property
     def grpc_external_docker_port(self) -> int:
@@ -197,13 +211,13 @@ class DockerNode(LoggingDockerBase):
         This renders the network name that the docker client should have opened for Python Client connection
         """
         # Networks are created in docker_run_tests.sh.  Must stay in sync.
-        return f"cl-{self.docker_tag}-{self.config.number}"
+        return f"cl-{self.docker_tag}-{self.config.unique_run_num}-{self.config.number}"
 
     def join_client_network(self) -> None:
         """
         Joins DockerNode to client network to enable Python Client communication
         """
-        if os.environ.get("TAG_NAME"):
+        if self.is_in_docker:
             # We are running in docker, because we have this environment variable
             self.connect_to_network(self.client_network_name)
             logging.info(
@@ -219,13 +233,10 @@ class DockerNode(LoggingDockerBase):
         """
         ports = (
             (
-                self.GRPC_SERVER_PORT + (self.config.behind_proxy and 10000 or 0),
+                self.GRPC_SERVER_PORT + self.behind_proxy_offset,
                 self.grpc_server_docker_port,
             ),
-            (
-                self.KADEMLIA_PORT + (self.config.behind_proxy and 10000 or 0),
-                self.kademlia_docker_port,
-            ),
+            (self.KADEMLIA_PORT + self.behind_proxy_offset, self.kademlia_docker_port),
             (self.GRPC_INTERNAL_PORT, self.grpc_internal_docker_port),
             (self.GRPC_EXTERNAL_PORT, self.grpc_external_docker_port),
             (self.HTTP_PORT, self.http_port),
@@ -412,11 +423,11 @@ class DockerNode(LoggingDockerBase):
         session_args = ABI.args(
             [
                 ABI.account("account", to_account.public_key_binary),
-                ABI.u64("amount", amount),
+                ABI.u512("amount", amount),
             ]
         )
 
-        deploy_hash_hex = self.p_client.deploy(
+        deploy_hash = self.p_client.deploy(
             from_address=from_account.public_key_hex,
             session_contract=session_contract,
             payment_contract=payment_contract,
@@ -427,17 +438,16 @@ class DockerNode(LoggingDockerBase):
             payment_args=payment_args,
         )
 
-        assert len(deploy_hash_hex) == 64
-
-        response = self.p_client.propose()
-
-        block_hash = response.block_hash.hex()
-        assert len(deploy_hash_hex) == 64
-
-        if is_deploy_error_check:
-            for deploy_info in self.p_client.show_deploys(block_hash):
-                if deploy_info.is_error:
-                    raise Exception(f"transfer_to_account: {deploy_info.error_message}")
+        client = self.p_client.client
+        result = client.wait_for_deploy_processed(
+            deploy_hash, on_error_raise=is_deploy_error_check
+        )
+        last_processing_result = result.processing_results[0]
+        block_hash = last_processing_result.block_info.summary.block_hash.hex()
+        if is_deploy_error_check and last_processing_result.is_error:
+            raise Exception(
+                f"transfer_to_account: {last_processing_result.error_message}"
+            )
 
         return block_hash
 
@@ -450,7 +460,7 @@ class DockerNode(LoggingDockerBase):
         # NOTE: The Scala client is bundled with a bond contract that expects long_value,
         #       but the integration test version expects int.
         json_args = json.dumps([{"name": "amount", "value": {"int_value": amount}}])
-        return self._deploy_and_propose_with_abi_args(
+        return self._deploy_with_abi_args_and_get_block_hash(
             session_contract, Account(from_account_id), json_args
         )
 
@@ -460,21 +470,14 @@ class DockerNode(LoggingDockerBase):
         maybe_amount: Optional[int] = None,
         from_account_id: Union[str, int] = "genesis",
     ) -> str:
-        # NOTE: The Scala client is bundled with an unbond contract that expects an optional
-        #       value, but the integration tests have their own version which expects an int
-        #       and turns 0 into None inside the contract itself
-        # amount = {} if maybe_amount is None else {"int_value": maybe_amount}
-        # json_args = json.dumps(
-        #     [{"name": "amount", "value": {"optional_value": amount}}]
-        # )
         json_args = json.dumps(
             [{"name": "amount", "value": {"int_value": maybe_amount or 0}}]
         )
-        return self._deploy_and_propose_with_abi_args(
+        return self._deploy_with_abi_args_and_get_block_hash(
             session_contract, Account(from_account_id), json_args
         )
 
-    def _deploy_and_propose_with_abi_args(
+    def _deploy_with_abi_args_and_get_block_hash(
         self,
         session_contract: str,
         from_account: Account,
@@ -482,7 +485,7 @@ class DockerNode(LoggingDockerBase):
         gas_price: int = 1,
     ) -> str:
 
-        self.p_client.deploy(
+        deploy_hash = self.p_client.deploy(
             from_address=from_account.public_key_hex,
             session_contract=session_contract,
             gas_price=gas_price,
@@ -490,11 +493,9 @@ class DockerNode(LoggingDockerBase):
             private_key=from_account.private_key_path,
             session_args=self.p_client.abi.args_from_json(json_args),
         )
-
-        response = self.p_client.propose()
-
-        block_hash = response.block_hash.hex()
-        return block_hash
+        return self.wait_for_deploy_processed_and_get_block_hash(
+            deploy_hash, on_error_raise=False
+        )
 
     def transfer_to_accounts(self, account_value_list) -> List[str]:
         """
@@ -548,3 +549,40 @@ class DockerNode(LoggingDockerBase):
         rc, output = self.exec_run(cmd)
         if rc != 0:
             raise Exception(f"Error executing '{cmd}: Exit code {rc}: {output}")
+
+    def deploy_and_wait_for_processed(self, on_error_raise=True, **deploy_kwargs):
+        client = self.p_client.client
+        deploy_hash = client.deploy(**deploy_kwargs)
+        deploy_info = client.wait_for_deploy_processed(
+            deploy_hash, on_error_raise=on_error_raise
+        )
+        return deploy_info
+
+    def deploy_and_get_block_hash(
+        self, account, contract, on_error_raise=True, **deploy_kwargs
+    ):
+        deploy_args = dict(
+            session=self.resources_folder / contract,
+            from_addr=account.public_key_hex,
+            public_key=account.public_key_path,
+            private_key=account.private_key_path,
+            payment_amount=10 ** 8,
+        )
+        deploy_args.update(deploy_kwargs)
+        deploy_info = self.deploy_and_wait_for_processed(
+            on_error_raise=on_error_raise, **deploy_args
+        )
+        block_hash = deploy_info.processing_results[
+            0
+        ].block_info.summary.block_hash.hex()
+        return block_hash
+
+    def wait_for_deploy_processed_and_get_block_hash(
+        self, deploy_hash, on_error_raise=True
+    ):
+        result = self.p_client.client.wait_for_deploy_processed(
+            deploy_hash, on_error_raise=on_error_raise
+        )
+        last_processing_result = result.processing_results[0]
+        block_hash = last_processing_result.block_info.summary.block_hash.hex()
+        return block_hash

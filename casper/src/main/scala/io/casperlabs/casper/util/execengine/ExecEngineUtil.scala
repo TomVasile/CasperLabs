@@ -15,14 +15,16 @@ import io.casperlabs.casper.DeploySelection.{
 import CommutingDeploys._
 import io.casperlabs.casper._
 import io.casperlabs.casper.consensus.state.{CLType, CLValue, Key, ProtocolVersion, StoredValue}
-import io.casperlabs.casper.consensus.{state, Block, Deploy}
+import io.casperlabs.casper.consensus.{state, Block, Bond, Deploy}
+import io.casperlabs.casper.dag.DagOperations
 import io.casperlabs.casper.util.execengine.ExecEngineUtil.StateHash
 import io.casperlabs.casper.util.execengine.Op.{OpMap, OpMapAddComm}
-import io.casperlabs.casper.util.{CasperLabsProtocol, DagOperations, ProtoUtil}
+import io.casperlabs.casper.util.{CasperLabsProtocol, ProtoUtil}
 import io.casperlabs.casper.validation.Validation.BlockEffects
 import io.casperlabs.catscontrib.MonadThrowable
 import io.casperlabs.ipc._
 import io.casperlabs.metrics.Metrics
+import io.casperlabs.mempool.DeployBuffer
 import io.casperlabs.models.{Message, SmartContractEngineError, DeployResult => _}
 import io.casperlabs.shared.Log
 import io.casperlabs.smartcontracts.ExecutionEngineService
@@ -31,8 +33,10 @@ import io.casperlabs.storage.dag.DagRepresentation
 import io.casperlabs.storage.deploy.{DeployStorage, DeployStorageWriter}
 import io.casperlabs.models.BlockImplicits._
 import io.casperlabs.metrics.implicits._
+import io.casperlabs.models.Message.{JRank, MainRank}
 import io.casperlabs.smartcontracts.ExecutionEngineService.CommitResult
 
+import scala.util.{Failure, Success}
 import scala.util.Either
 
 case class DeploysCheckpoint(
@@ -40,7 +44,8 @@ case class DeploysCheckpoint(
     postStateHash: StateHash,
     bondedValidators: Seq[io.casperlabs.casper.consensus.Bond],
     deploysForBlock: Seq[Block.ProcessedDeploy],
-    protocolVersion: state.ProtocolVersion
+    protocolVersion: state.ProtocolVersion,
+    stageEffects: Map[Int, ExecEngineUtil.TransformMap]
 )
 
 object ExecEngineUtil {
@@ -80,10 +85,11 @@ object ExecEngineUtil {
     */
   def commitEffects[F[_]: MonadThrowable](
       initPreStateHash: ByteString,
+      initBonds: Seq[Bond],
       protocolVersion: ProtocolVersion,
       blockEffects: BlockEffects
   )(implicit E: ExecutionEngineService[F]): F[ExecutionEngineService.CommitResult] =
-    blockEffects.effects.toList.sortBy(_._1).foldM(CommitResult(initPreStateHash, Seq.empty)) {
+    blockEffects.effects.toList.sortBy(_._1).foldM(CommitResult(initPreStateHash, initBonds)) {
       case (state, (_, transforms)) =>
         E.commit(state.postStateHash, transforms.toList, protocolVersion).rethrow
     }
@@ -114,14 +120,16 @@ object ExecEngineUtil {
           val (deploysForBlock, transforms) = ExecEngineUtil
             .unzipEffectsAndDeploys(deployEffects, stage)
             .unzip
-          eeCommit(prestate, transforms.flatten, protocolVersion).rethrow
+          val transformMap = transforms.flatten
+          eeCommit(prestate, transformMap, protocolVersion).rethrow
             .map { commitResult =>
               DeploysCheckpoint(
                 prestate,
                 commitResult.postStateHash,
                 commitResult.bondedValidators,
                 deploysForBlock,
-                protocolVersion
+                protocolVersion,
+                Map(stage -> transformMap)
               ).asRight[List[PreconditionFailure]]
             }
         }
@@ -132,7 +140,7 @@ object ExecEngineUtil {
     *
     * In essence, this simulates sequential execution EE should be providing natively.
     */
-  protected[execengine] def execCommitSeqDeploys[F[_]: MonadThrowable: Log: Metrics: DeployStorage: ExecutionEngineService](
+  protected[execengine] def execCommitSeqDeploys[F[_]: MonadThrowable: Log: Metrics: DeployStorage: DeployBuffer: ExecutionEngineService](
       prestateHash: ByteString,
       blocktime: Long,
       protocolVersion: state.ProtocolVersion,
@@ -143,11 +151,12 @@ object ExecEngineUtil {
         preconditionFailures: List[PreconditionFailure],
         postStateHash: ByteString,
         blockEffects: Seq[Block.ProcessedDeploy],
-        bondedValidators: Seq[io.casperlabs.casper.consensus.Bond]
+        bondedValidators: Seq[io.casperlabs.casper.consensus.Bond],
+        stageEffects: Map[Int, TransformMap]
     )
 
     object State {
-      def init: State = State(List.empty, prestateHash, Seq.empty, Seq.empty)
+      def init: State = State(List.empty, prestateHash, Seq.empty, Seq.empty, Map.empty)
     }
 
     // We have to move idx one to the right (start with `1`) as `0` is reserved for commuting deploys.
@@ -176,7 +185,8 @@ object ExecEngineUtil {
                       state.copy(
                         postStateHash = deploysCheckpoint.postStateHash,
                         blockEffects = state.blockEffects ++ deploysCheckpoint.deploysForBlock,
-                        bondedValidators = deploysCheckpoint.bondedValidators
+                        bondedValidators = deploysCheckpoint.bondedValidators,
+                        stageEffects = state.stageEffects |+| deploysCheckpoint.stageEffects
                       )
                   }
               }
@@ -187,22 +197,23 @@ object ExecEngineUtil {
       state.postStateHash,
       state.bondedValidators,
       state.blockEffects,
-      protocolVersion
+      protocolVersion,
+      state.stageEffects
     )
   }
 
   /** Given a set of chosen parents create a "deploy checkpoint".
     */
-  def computeDeploysCheckpoint[F[_]: MonadThrowable: DeployStorage: Log: ExecutionEngineService: DeploySelection: Metrics](
+  def computeDeploysCheckpoint[F[_]: MonadThrowable: DeployStorage: DeployBuffer: Log: ExecutionEngineService: DeploySelection: Metrics](
       merged: MergeResult[TransformMap, Block],
       deployStream: fs2.Stream[F, Deploy],
       blocktime: Long,
       protocolVersion: state.ProtocolVersion,
-      rank: Long,
+      mainRank: MainRank,
       upgrades: Seq[ChainSpec.UpgradePoint]
   ): F[DeploysCheckpoint] = Metrics[F].timer("computeDeploysCheckpoint") {
     for {
-      preStateHash <- computePrestate[F](merged, rank, upgrades).timer("computePrestate")
+      preStateHash <- computePrestate[F](merged, mainRank, upgrades).timer("computePrestate")
       DeploySelectionResult(commuting, conflicting, preconditionFailures) <- DeploySelection[F]
                                                                               .select(
                                                                                 (
@@ -214,8 +225,9 @@ object ExecEngineUtil {
                                                                               )
       _                             <- handleInvalidDeploys[F](preconditionFailures)
       (deploysForBlock, transforms) = ExecEngineUtil.unzipEffectsAndDeploys(commuting).unzip
+      stageEffects                  = Map(0 -> transforms.flatten)
       parResult <- ExecutionEngineService[F]
-                    .commit(preStateHash, transforms.flatten, protocolVersion)
+                    .commit(preStateHash, stageEffects(0), protocolVersion)
                     .rethrow
       result <- NonEmptyList
                  .fromList(conflicting)
@@ -226,7 +238,8 @@ object ExecEngineUtil {
                      parResult.postStateHash,
                      parResult.bondedValidators,
                      deploysForBlock,
-                     protocolVersion
+                     protocolVersion,
+                     stageEffects
                    ).pure[F]
                  )( // Execute conflicting deploys in a sequence.
                    nelDeploys =>
@@ -244,7 +257,8 @@ object ExecEngineUtil {
                            sequentialResult.postStateHash,
                            sequentialResult.bondedValidators,
                            deploysForBlock ++ sequentialResult.deploysForBlock,
-                           protocolVersion
+                           protocolVersion,
+                           stageEffects |+| sequentialResult.stageEffects
                          )
                        }
                        .timer("commitDeploysSequentially")
@@ -258,7 +272,7 @@ object ExecEngineUtil {
   // Then if a block gets finalized and we remove the deploys it contains, and _then_ one of them
   // turns up again for some reason, we'll treat it again as a pending deploy and try to include it.
   // At that point the EE will discard it as the nonce is in the past and we'll drop it here.
-  def handleInvalidDeploys[F[_]: MonadThrowable: DeployStorage: Log: Metrics](
+  def handleInvalidDeploys[F[_]: MonadThrowable: DeployStorage: DeployBuffer: Log: Metrics](
       invalidDeploys: List[PreconditionFailure]
   ): F[Unit] = Metrics[F].timer("handleInvalidDeploys") {
     for {
@@ -268,10 +282,9 @@ object ExecEngineUtil {
               s"${PrettyPrinter.buildString(d.deploy.deployHash) -> "deploy"} failed precondition error: ${d.errorMessage}"
             )
           }
-      _ <- DeployStorageWriter[F]
-            .markAsDiscarded(
-              invalidDeploys.map(pf => (pf.deploy, pf.errorMessage))
-            ) whenA invalidDeploys.nonEmpty
+      _ <- DeployBuffer[F].discardDeploys(
+            invalidDeploys.map(d => (d.deploy.deployHash, d.errorMessage))
+          )
     } yield ()
   }
 
@@ -284,20 +297,33 @@ object ExecEngineUtil {
       blocktime: Long,
       deploys: Seq[Deploy],
       protocolVersion: state.ProtocolVersion
-  )(eeExec: EEExecFun[F]): F[List[ProcessedDeployResult]] =
+  )(eeExec: EEExecFun[F]): F[List[ProcessedDeployResult]] = {
+    val (eeDeploys, goodDeploys, badArgs) =
+      deploys.foldLeft(
+        (Vector.empty[DeployItem], Vector.empty[Deploy], Vector.empty[PreconditionFailure])
+      ) {
+        case ((eeAcc, goodAcc, failAcc), deploy) =>
+          ProtoUtil.deployDataToEEDeploy(deploy) match {
+            case Failure(err) =>
+              val updated = failAcc :+ PreconditionFailure(deploy, err.getMessage)
+              (eeAcc, goodAcc, updated)
+
+            case Success(ipcDeploy) =>
+              (eeAcc :+ ipcDeploy, goodAcc :+ deploy, failAcc)
+          }
+      }
+
     for {
-      eeDeploys <- MonadThrowable[F].fromTry(
-                    deploys.toList.traverse(ProtoUtil.deployDataToEEDeploy[F](_))
-                  )
       results <- eeExec(prestate, blocktime, eeDeploys, protocolVersion).rethrow
       _ <- MonadThrowable[F]
             .raiseError[List[ProcessedDeployResult]](
               SmartContractEngineError(
-                s"Unexpected number of results (${results.size} vs ${deploys.size} expected."
+                s"Unexpected number of results (${results.size} vs ${goodDeploys.size} expected."
               )
             )
-            .whenA(results.size != deploys.size)
-    } yield zipDeploysResults(deploys, results)
+            .whenA(results.size != goodDeploys.size)
+    } yield zipDeploysResults(goodDeploys, results) ++ badArgs
+  }
 
   /** Chooses a set of commuting effects.
     *
@@ -390,7 +416,7 @@ object ExecEngineUtil {
       for {
         protocolVersion <- CasperLabsProtocol[F].protocolFromBlock(block)
         effectsRef      <- Ref[F].of(Map.empty[Int, Seq[TransformEntry]])
-        _ <- deploysGrouped.toList.foldLeftM(prestate) {
+        _ <- deploysGrouped.toList.sortBy(_._1).foldLeftM(prestate) {
               case (preStateHash, (stage, deploys)) =>
                 val eeCommitCaptureEffects: EECommitFun[F] =
                   (preState, transforms, protocol) =>
@@ -436,7 +462,7 @@ object ExecEngineUtil {
     */
   def computePrestate[F[_]: MonadThrowable: ExecutionEngineService: Log](
       merged: MergeResult[TransformMap, Block],
-      rank: Long, // Rank of the block we are creating on top of the parents; can be way ahead because of justifications.
+      rank: MainRank, // Rank of the block we are creating on top of the parents; can be way ahead because of justifications.
       upgrades: Seq[ChainSpec.UpgradePoint]
   ): F[StateHash] = {
     val mergedStateHash: F[StateHash] = merged match {
@@ -458,7 +484,7 @@ object ExecEngineUtil {
     mergedStateHash.flatMap { postStateHash =>
       if (merged.parents.nonEmpty) {
         val protocolVersion = merged.parents.head.getHeader.getProtocolVersion
-        val maxRank         = merged.parents.map(_.getHeader.rank).max
+        val maxRank         = merged.parents.map(_.getHeader.mainRank).max
 
         val activatedUpgrades = upgrades.filter { u =>
           maxRank < u.getActivationPoint.rank && u.getActivationPoint.rank <= rank

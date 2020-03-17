@@ -1,21 +1,18 @@
-use base16;
-
 use engine_core::engine_state::{
     genesis::{GenesisAccount, POS_BONDING_PURSE},
     CONV_RATE,
 };
-use engine_shared::{motes::Motes, stored_value::StoredValue, transform::Transform};
-use engine_test_support::low_level::{
-    utils, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNTS, DEFAULT_ACCOUNT_ADDR,
-    DEFAULT_ACCOUNT_INITIAL_BALANCE, DEFAULT_PAYMENT,
+use engine_shared::motes::Motes;
+use engine_test_support::{
+    internal::{
+        utils, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNTS, DEFAULT_PAYMENT,
+    },
+    DEFAULT_ACCOUNT_ADDR, DEFAULT_ACCOUNT_INITIAL_BALANCE,
 };
-use types::{
-    account::{PublicKey, PurseId},
-    ApiError, Key, U512,
-};
+use types::{account::PublicKey, ApiError, Key, URef, U512};
 
 const CONTRACT_POS_BONDING: &str = "pos_bonding.wasm";
-const ACCOUNT_1_ADDR: [u8; 32] = [1u8; 32];
+const ACCOUNT_1_ADDR: PublicKey = PublicKey::ed25519_from([1u8; 32]);
 const ACCOUNT_1_SEED_AMOUNT: u64 = 100_000_000 * 2;
 const ACCOUNT_1_STAKE: u64 = 42_000;
 const ACCOUNT_1_UNBOND_1: u64 = 22_000;
@@ -31,23 +28,20 @@ const TEST_BOND_FROM_MAIN_PURSE: &str = "bond-from-main-purse";
 const TEST_SEED_NEW_ACCOUNT: &str = "seed_new_account";
 const TEST_UNBOND: &str = "unbond";
 
-fn get_pos_purse_id_by_name(
-    builder: &InMemoryWasmTestBuilder,
-    purse_name: &str,
-) -> Option<PurseId> {
+fn get_pos_purse_by_name(builder: &InMemoryWasmTestBuilder, purse_name: &str) -> Option<URef> {
     let pos_contract = builder.get_pos_contract();
 
     pos_contract
         .named_keys()
         .get(purse_name)
         .and_then(Key::as_uref)
-        .map(|u| PurseId::new(*u))
+        .cloned()
 }
 
 fn get_pos_bonding_purse_balance(builder: &InMemoryWasmTestBuilder) -> U512 {
-    let purse_id = get_pos_purse_id_by_name(builder, POS_BONDING_PURSE)
-        .expect("should find PoS payment purse");
-    builder.get_purse_balance(purse_id)
+    let purse =
+        get_pos_purse_by_name(builder, POS_BONDING_PURSE).expect("should find PoS payment purse");
+    builder.get_purse_balance(purse)
 }
 
 #[ignore]
@@ -56,7 +50,7 @@ fn should_run_successful_bond_and_unbond() {
     let accounts = {
         let mut tmp: Vec<GenesisAccount> = DEFAULT_ACCOUNTS.clone();
         let account = GenesisAccount::new(
-            PublicKey::new([42; 32]),
+            PublicKey::ed25519_from([42; 32]),
             Motes::new(GENESIS_VALIDATOR_STAKE.into()) * Motes::new(2.into()),
             Motes::new(GENESIS_VALIDATOR_STAKE.into()),
         );
@@ -66,16 +60,14 @@ fn should_run_successful_bond_and_unbond() {
 
     let genesis_config = utils::create_genesis_config(accounts);
 
-    let result = InMemoryWasmTestBuilder::default()
-        .run_genesis(&genesis_config)
-        .finish();
+    let mut builder = InMemoryWasmTestBuilder::default();
+    let result = builder.run_genesis(&genesis_config).finish();
 
-    let default_account = result
-        .builder()
+    let default_account = builder
         .get_account(DEFAULT_ACCOUNT_ADDR)
         .expect("should get account 1");
 
-    let pos = result.builder().get_pos_contract_uref();
+    let pos = builder.get_pos_contract_uref();
 
     let exec_request_1 = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
@@ -84,35 +76,25 @@ fn should_run_successful_bond_and_unbond() {
     )
     .build();
 
-    let result = InMemoryWasmTestBuilder::from_result(result)
+    let mut builder = InMemoryWasmTestBuilder::from_result(result);
+    let result = builder
         .exec(exec_request_1)
         .expect_success()
         .commit()
         .finish();
 
-    let exec_response = result
-        .builder()
+    let exec_response = builder
         .get_exec_response(0)
         .expect("should have exec response");
     let mut genesis_gas_cost = utils::get_exec_costs(exec_response)[0];
 
-    let transforms = &result.builder().get_transforms()[0];
-
-    let pos_transform = &transforms[&Key::from(pos).normalize()];
-
-    // Verify that genesis account is in validator queue
-    let contract = if let Transform::Write(StoredValue::Contract(contract)) = pos_transform {
-        contract
-    } else {
-        panic!(
-            "pos transform is expected to be of AddKeys variant but received {:?}",
-            pos_transform
-        );
-    };
+    let contract = builder
+        .get_contract(pos.remove_access_rights())
+        .expect("should have contract");
 
     let lookup_key = format!(
         "v_{}_{}",
-        base16::encode_lower(&DEFAULT_ACCOUNT_ADDR),
+        base16::encode_lower(&DEFAULT_ACCOUNT_ADDR.as_bytes()),
         GENESIS_ACCOUNT_STAKE
     );
     assert!(contract.named_keys().contains_key(&lookup_key));
@@ -120,7 +102,7 @@ fn should_run_successful_bond_and_unbond() {
     // Gensis validator [42; 32] bonded 50k, and genesis account bonded 100k inside
     // the test contract
     assert_eq!(
-        get_pos_bonding_purse_balance(result.builder()),
+        get_pos_bonding_purse_balance(&builder),
         U512::from(GENESIS_VALIDATOR_STAKE + GENESIS_ACCOUNT_STAKE)
     );
 
@@ -129,7 +111,7 @@ fn should_run_successful_bond_and_unbond() {
         CONTRACT_POS_BONDING,
         (
             String::from(TEST_SEED_NEW_ACCOUNT),
-            PublicKey::new(ACCOUNT_1_ADDR),
+            ACCOUNT_1_ADDR,
             U512::from(ACCOUNT_1_SEED_AMOUNT),
         ),
     )
@@ -146,7 +128,8 @@ fn should_run_successful_bond_and_unbond() {
     .build();
 
     // Create new account (from genesis funds) and bond with it
-    let result = InMemoryWasmTestBuilder::from_result(result)
+    let mut builder = InMemoryWasmTestBuilder::from_result(result);
+    let result = builder
         .exec(exec_request_2)
         .expect_success()
         .commit()
@@ -155,43 +138,32 @@ fn should_run_successful_bond_and_unbond() {
         .commit()
         .finish();
 
-    let exec_response = result
-        .builder()
+    let exec_response = builder
         .get_exec_response(0)
         .expect("should have exec response");
     genesis_gas_cost = genesis_gas_cost + utils::get_exec_costs(exec_response)[0];
 
-    let account_1 = result
-        .builder()
+    let account_1 = builder
         .get_account(ACCOUNT_1_ADDR)
         .expect("should get account 1");
 
-    let pos = result.builder().get_pos_contract_uref();
-
-    let transforms = &result.builder().get_transforms()[1];
-
-    let pos_transform = &transforms[&Key::from(pos).normalize()];
+    let pos = builder.get_pos_contract_uref();
 
     // Verify that genesis account is in validator queue
-    let contract = if let Transform::Write(StoredValue::Contract(contract)) = pos_transform {
-        contract
-    } else {
-        panic!(
-            "pos transform is expected to be of AddKeys variant but received {:?}",
-            pos_transform
-        );
-    };
+    let contract = builder
+        .get_contract(pos.remove_access_rights())
+        .expect("should have contract");
 
     let lookup_key = format!(
         "v_{}_{}",
-        base16::encode_lower(&ACCOUNT_1_ADDR),
+        base16::encode_lower(ACCOUNT_1_ADDR.as_bytes()),
         ACCOUNT_1_STAKE
     );
     assert!(contract.named_keys().contains_key(&lookup_key));
 
     // Gensis validator [42; 32] bonded 50k, and genesis account bonded 100k inside
     // the test contract
-    let pos_bonding_purse_balance = get_pos_bonding_purse_balance(result.builder());
+    let pos_bonding_purse_balance = get_pos_bonding_purse_balance(&builder);
     assert_eq!(
         pos_bonding_purse_balance,
         U512::from(GENESIS_VALIDATOR_STAKE + GENESIS_ACCOUNT_STAKE + ACCOUNT_1_STAKE)
@@ -210,16 +182,16 @@ fn should_run_successful_bond_and_unbond() {
         ),
     )
     .build();
-    let account_1_bal_before = result.builder().get_purse_balance(account_1.purse_id());
-    let result = InMemoryWasmTestBuilder::from_result(result)
+    let account_1_bal_before = builder.get_purse_balance(account_1.main_purse());
+    let mut builder = InMemoryWasmTestBuilder::from_result(result);
+    let result = builder
         .exec(exec_request_4)
         .expect_success()
         .commit()
         .finish();
 
-    let account_1_bal_after = result.builder().get_purse_balance(account_1.purse_id());
-    let exec_response = result
-        .builder()
+    let account_1_bal_after = builder.get_purse_balance(account_1.main_purse());
+    let exec_response = builder
         .get_exec_response(0)
         .expect("should have exec response");
     let gas_cost_b = Motes::from_gas(utils::get_exec_costs(exec_response)[0], CONV_RATE)
@@ -232,22 +204,22 @@ fn should_run_successful_bond_and_unbond() {
 
     // POS bonding purse is decreased
     assert_eq!(
-        get_pos_bonding_purse_balance(result.builder()),
+        get_pos_bonding_purse_balance(&builder),
         U512::from(GENESIS_VALIDATOR_STAKE + GENESIS_ACCOUNT_STAKE + ACCOUNT_1_UNBOND_2)
     );
 
-    let pos_contract = result.builder().get_pos_contract();
+    let pos_contract = builder.get_pos_contract();
 
     let lookup_key = format!(
         "v_{}_{}",
-        base16::encode_lower(&ACCOUNT_1_ADDR),
+        base16::encode_lower(ACCOUNT_1_ADDR.as_bytes()),
         ACCOUNT_1_STAKE
     );
     assert!(!pos_contract.named_keys().contains_key(&lookup_key));
 
     let lookup_key = format!(
         "v_{}_{}",
-        base16::encode_lower(&ACCOUNT_1_ADDR),
+        base16::encode_lower(ACCOUNT_1_ADDR.as_bytes()),
         ACCOUNT_1_UNBOND_2
     );
     // Account 1 is still tracked anymore in the bonding queue with different uref
@@ -268,22 +240,20 @@ fn should_run_successful_bond_and_unbond() {
         ),
     )
     .build();
-    let result = InMemoryWasmTestBuilder::from_result(result)
+    let mut builder = InMemoryWasmTestBuilder::from_result(result);
+    let result = builder
         .exec(exec_request_5)
         .expect_success()
         .commit()
         .finish();
 
-    let exec_response = result
-        .builder()
+    let exec_response = builder
         .get_exec_response(0)
         .expect("should have exec response");
     genesis_gas_cost = genesis_gas_cost + utils::get_exec_costs(exec_response)[0];
 
     assert_eq!(
-        result
-            .builder()
-            .get_purse_balance(default_account.purse_id()),
+        builder.get_purse_balance(default_account.main_purse()),
         U512::from(
             DEFAULT_ACCOUNT_INITIAL_BALANCE
                 - Motes::from_gas(genesis_gas_cost, CONV_RATE)
@@ -297,14 +267,14 @@ fn should_run_successful_bond_and_unbond() {
 
     // POS bonding purse is further decreased
     assert_eq!(
-        get_pos_bonding_purse_balance(result.builder()),
+        get_pos_bonding_purse_balance(&builder),
         U512::from(GENESIS_VALIDATOR_STAKE + GENESIS_ACCOUNT_UNBOND_2 + ACCOUNT_1_UNBOND_2)
     );
 
     //
     // Stage 3a - Fully unbond account1 with Some(TOTAL_AMOUNT)
     //
-    let account_1_bal_before = result.builder().get_purse_balance(account_1.purse_id());
+    let account_1_bal_before = builder.get_purse_balance(account_1.main_purse());
 
     let exec_request_6 = ExecuteRequestBuilder::standard(
         ACCOUNT_1_ADDR,
@@ -316,15 +286,15 @@ fn should_run_successful_bond_and_unbond() {
     )
     .build();
 
-    let result = InMemoryWasmTestBuilder::from_result(result)
+    let mut builder = InMemoryWasmTestBuilder::from_result(result);
+    let result = builder
         .exec(exec_request_6)
         .expect_success()
         .commit()
         .finish();
 
-    let account_1_bal_after = result.builder().get_purse_balance(account_1.purse_id());
-    let exec_response = result
-        .builder()
+    let account_1_bal_after = builder.get_purse_balance(account_1.main_purse());
+    let exec_response = builder
         .get_exec_response(0)
         .expect("should have exec response");
     let gas_cost_b = Motes::from_gas(utils::get_exec_costs(exec_response)[0], CONV_RATE)
@@ -338,15 +308,15 @@ fn should_run_successful_bond_and_unbond() {
     // POS bonding purse contains now genesis validator (50k) + genesis account
     // (55k)
     assert_eq!(
-        get_pos_bonding_purse_balance(result.builder()),
+        get_pos_bonding_purse_balance(&builder),
         U512::from(GENESIS_VALIDATOR_STAKE + GENESIS_ACCOUNT_UNBOND_2)
     );
 
-    let pos_contract = result.builder().get_pos_contract();
+    let pos_contract = builder.get_pos_contract();
 
     let lookup_key = format!(
         "v_{}_{}",
-        base16::encode_lower(&ACCOUNT_1_ADDR),
+        base16::encode_lower(ACCOUNT_1_ADDR.as_bytes()),
         ACCOUNT_1_UNBOND_2
     );
     // Account 1 isn't tracked anymore in the bonding queue
@@ -364,14 +334,14 @@ fn should_run_successful_bond_and_unbond() {
     )
     .build();
 
-    let result = InMemoryWasmTestBuilder::from_result(result)
+    let mut builder = InMemoryWasmTestBuilder::from_result(result);
+    let result = builder
         .exec(exec_request_7)
         .expect_success()
         .commit()
         .finish();
 
-    let exec_response = result
-        .builder()
+    let exec_response = builder
         .get_exec_response(0)
         .expect("should have exec response");
     genesis_gas_cost = genesis_gas_cost + utils::get_exec_costs(exec_response)[0];
@@ -380,7 +350,7 @@ fn should_run_successful_bond_and_unbond() {
     assert_eq!(
         result
             .builder()
-            .get_purse_balance(default_account.purse_id()),
+            .get_purse_balance(default_account.main_purse()),
         U512::from(
             DEFAULT_ACCOUNT_INITIAL_BALANCE
                 - Motes::from_gas(genesis_gas_cost, CONV_RATE)
@@ -393,14 +363,14 @@ fn should_run_successful_bond_and_unbond() {
 
     // Final balance after two full unbonds is the initial bond valuee
     assert_eq!(
-        get_pos_bonding_purse_balance(result.builder()),
+        get_pos_bonding_purse_balance(&builder),
         U512::from(GENESIS_VALIDATOR_STAKE)
     );
 
-    let pos_contract = result.builder().get_pos_contract();
+    let pos_contract = builder.get_pos_contract();
     let lookup_key = format!(
         "v_{}_{}",
-        base16::encode_lower(&DEFAULT_ACCOUNT_ADDR),
+        base16::encode_lower(&DEFAULT_ACCOUNT_ADDR.as_bytes()),
         GENESIS_ACCOUNT_UNBOND_2
     );
     // Genesis is still tracked anymore in the bonding queue with different uref
@@ -419,7 +389,7 @@ fn should_run_successful_bond_and_unbond() {
             .iter()
             .filter(|(key, _)| key.starts_with(&format!(
                 "v_{}",
-                base16::encode_lower(&DEFAULT_ACCOUNT_ADDR)
+                base16::encode_lower(&DEFAULT_ACCOUNT_ADDR.as_bytes())
             )))
             .count(),
         0
@@ -428,9 +398,10 @@ fn should_run_successful_bond_and_unbond() {
         pos_contract
             .named_keys()
             .iter()
-            .filter(
-                |(key, _)| key.starts_with(&format!("v_{}", base16::encode_lower(&ACCOUNT_1_ADDR)))
-            )
+            .filter(|(key, _)| key.starts_with(&format!(
+                "v_{}",
+                base16::encode_lower(ACCOUNT_1_ADDR.as_bytes())
+            )))
             .count(),
         0
     );
@@ -451,7 +422,7 @@ fn should_fail_bonding_with_insufficient_funds() {
     let accounts = {
         let mut tmp: Vec<GenesisAccount> = DEFAULT_ACCOUNTS.clone();
         let account = GenesisAccount::new(
-            PublicKey::new([42; 32]),
+            PublicKey::ed25519_from([42; 32]),
             Motes::new(GENESIS_VALIDATOR_STAKE.into()) * Motes::new(2.into()),
             Motes::new(GENESIS_VALIDATOR_STAKE.into()),
         );
@@ -466,7 +437,7 @@ fn should_fail_bonding_with_insufficient_funds() {
         CONTRACT_POS_BONDING,
         (
             String::from(TEST_SEED_NEW_ACCOUNT),
-            PublicKey::new(ACCOUNT_1_ADDR),
+            ACCOUNT_1_ADDR,
             *DEFAULT_PAYMENT + GENESIS_ACCOUNT_STAKE,
         ),
     )
@@ -506,7 +477,7 @@ fn should_fail_unbonding_validator_without_bonding_first() {
     let accounts = {
         let mut tmp: Vec<GenesisAccount> = DEFAULT_ACCOUNTS.clone();
         let account = GenesisAccount::new(
-            PublicKey::new([42; 32]),
+            PublicKey::ed25519_from([42; 32]),
             Motes::new(GENESIS_VALIDATOR_STAKE.into()) * Motes::new(2.into()),
             Motes::new(GENESIS_VALIDATOR_STAKE.into()),
         );

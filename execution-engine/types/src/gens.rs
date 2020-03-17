@@ -1,4 +1,6 @@
-//! Contains functions for generating arbitrary values for use by [`Proptest`](https://crates.io/crates/proptest).
+//! Contains functions for generating arbitrary values for use by
+//! [`Proptest`](https://crates.io/crates/proptest).
+#![allow(missing_docs)]
 
 use alloc::{collections::BTreeMap, string::String, vec};
 
@@ -29,6 +31,7 @@ pub fn named_keys_arb(depth: usize) -> impl Strategy<Value = BTreeMap<String, Ke
 
 pub fn access_rights_arb() -> impl Strategy<Value = AccessRights> {
     prop_oneof![
+        Just(AccessRights::NONE),
         Just(AccessRights::READ),
         Just(AccessRights::ADD),
         Just(AccessRights::WRITE),
@@ -48,16 +51,13 @@ pub fn phase_arb() -> impl Strategy<Value = Phase> {
 }
 
 pub fn uref_arb() -> impl Strategy<Value = URef> {
-    (
-        array::uniform32(bits::u8::ANY),
-        option::weighted(option::Probability::new(0.8), access_rights_arb()),
-    )
-        .prop_map(|(id, maybe_access_rights)| URef::unsafe_new(id, maybe_access_rights))
+    (array::uniform32(bits::u8::ANY), access_rights_arb())
+        .prop_map(|(id, access_rights)| URef::new(id, access_rights))
 }
 
 pub fn key_arb() -> impl Strategy<Value = Key> {
     prop_oneof![
-        u8_slice_32().prop_map(Key::Account),
+        public_key_arb().prop_map(Key::Account),
         u8_slice_32().prop_map(Key::Hash),
         uref_arb().prop_map(Key::URef),
         (u8_slice_32(), u8_slice_32()).prop_map(|(seed, key)| Key::local(seed, &key))
@@ -65,7 +65,7 @@ pub fn key_arb() -> impl Strategy<Value = Key> {
 }
 
 pub fn public_key_arb() -> impl Strategy<Value = PublicKey> {
-    u8_slice_32().prop_map(Into::into)
+    u8_slice_32().prop_map(PublicKey::ed25519_from)
 }
 
 pub fn weight_arb() -> impl Strategy<Value = Weight> {

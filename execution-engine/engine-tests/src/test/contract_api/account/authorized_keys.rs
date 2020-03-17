@@ -1,7 +1,10 @@
 use engine_core::{engine_state, execution};
-use engine_test_support::low_level::{
-    DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR,
-    DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT, STANDARD_PAYMENT_CONTRACT,
+use engine_test_support::{
+    internal::{
+        DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_GENESIS_CONFIG,
+        DEFAULT_PAYMENT, STANDARD_PAYMENT_CONTRACT,
+    },
+    DEFAULT_ACCOUNT_ADDR,
 };
 use types::account::{PublicKey, Weight};
 
@@ -29,8 +32,8 @@ fn should_deploy_with_authorized_identity_key() {
 #[test]
 fn should_raise_auth_failure_with_invalid_key() {
     // tests that authorized keys that does not belong to account raises
-    // AuthorizationError
-    let key_1 = [254; 32];
+    // Error::Authorization
+    let key_1 = PublicKey::ed25519_from([254; 32]);
     assert_ne!(DEFAULT_ACCOUNT_ADDR, key_1);
 
     let exec_request = {
@@ -39,7 +42,7 @@ fn should_raise_auth_failure_with_invalid_key() {
             .with_payment_code(STANDARD_PAYMENT_CONTRACT, (*DEFAULT_PAYMENT,))
             .with_session_code(CONTRACT_AUTHORIZED_KEYS, (Weight::new(1), Weight::new(1)))
             .with_deploy_hash([1u8; 32])
-            .with_authorization_keys(&[PublicKey::new(key_1)])
+            .with_authorization_keys(&[key_1])
             .build();
         ExecuteRequestBuilder::from_deploy_item(deploy).build()
     };
@@ -65,20 +68,17 @@ fn should_raise_auth_failure_with_invalid_key() {
     );
     let message = format!("{}", deploy_result.error().unwrap());
 
-    assert_eq!(
-        message,
-        format!("{}", engine_state::Error::AuthorizationError)
-    )
+    assert_eq!(message, format!("{}", engine_state::Error::Authorization))
 }
 
 #[ignore]
 #[test]
 fn should_raise_auth_failure_with_invalid_keys() {
     // tests that authorized keys that does not belong to account raises
-    // AuthorizationError
-    let key_1 = [254; 32];
-    let key_2 = [253; 32];
-    let key_3 = [252; 32];
+    // Error::Authorization
+    let key_1 = PublicKey::ed25519_from([254; 32]);
+    let key_2 = PublicKey::ed25519_from([253; 32]);
+    let key_3 = PublicKey::ed25519_from([252; 32]);
     assert_ne!(DEFAULT_ACCOUNT_ADDR, key_1);
     assert_ne!(DEFAULT_ACCOUNT_ADDR, key_2);
     assert_ne!(DEFAULT_ACCOUNT_ADDR, key_3);
@@ -89,11 +89,7 @@ fn should_raise_auth_failure_with_invalid_keys() {
             .with_payment_code(STANDARD_PAYMENT_CONTRACT, (*DEFAULT_PAYMENT,))
             .with_session_code("authorized_keys.wasm", (Weight::new(1), Weight::new(1)))
             .with_deploy_hash([1u8; 32])
-            .with_authorization_keys(&[
-                PublicKey::new(key_2),
-                PublicKey::new(key_1),
-                PublicKey::new(key_3),
-            ])
+            .with_authorization_keys(&[key_2, key_1, key_3])
             .build();
         ExecuteRequestBuilder::from_deploy_item(deploy).build()
     };
@@ -115,19 +111,16 @@ fn should_raise_auth_failure_with_invalid_keys() {
     assert!(deploy_result.has_precondition_failure());
     let message = format!("{}", deploy_result.error().unwrap());
 
-    assert_eq!(
-        message,
-        format!("{}", engine_state::Error::AuthorizationError)
-    )
+    assert_eq!(message, format!("{}", engine_state::Error::Authorization))
 }
 
 #[ignore]
 #[test]
 fn should_raise_deploy_authorization_failure() {
     // tests that authorized keys needs sufficient cumulative weight
-    let key_1 = [254; 32];
-    let key_2 = [253; 32];
-    let key_3 = [252; 32];
+    let key_1 = PublicKey::ed25519_from([254; 32]);
+    let key_2 = PublicKey::ed25519_from([253; 32]);
+    let key_3 = PublicKey::ed25519_from([252; 32]);
     assert_ne!(DEFAULT_ACCOUNT_ADDR, key_1);
     assert_ne!(DEFAULT_ACCOUNT_ADDR, key_2);
     assert_ne!(DEFAULT_ACCOUNT_ADDR, key_3);
@@ -135,19 +128,19 @@ fn should_raise_deploy_authorization_failure() {
     let exec_request_1 = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
         CONTRACT_ADD_UPDATE_ASSOCIATED_KEY,
-        (PublicKey::new(key_1),),
+        (key_1,),
     )
     .build();
     let exec_request_2 = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
         CONTRACT_ADD_UPDATE_ASSOCIATED_KEY,
-        (PublicKey::new(key_2),),
+        (key_2,),
     )
     .build();
     let exec_request_3 = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
         CONTRACT_ADD_UPDATE_ASSOCIATED_KEY,
-        (PublicKey::new(key_3),),
+        (key_3,),
     )
     .build();
     // Deploy threshold is equal to 3, keymgmnt is still 1.
@@ -217,12 +210,7 @@ fn should_raise_deploy_authorization_failure() {
             // change deployment threshold to 4
             .with_session_code("authorized_keys.wasm", (Weight::new(6), Weight::new(5)))
             .with_deploy_hash([6u8; 32])
-            .with_authorization_keys(&[
-                PublicKey::new(DEFAULT_ACCOUNT_ADDR),
-                PublicKey::new(key_1),
-                PublicKey::new(key_2),
-                PublicKey::new(key_3),
-            ])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_ADDR, key_1, key_2, key_3])
             .build();
         ExecuteRequestBuilder::from_deploy_item(deploy).build()
     };
@@ -273,12 +261,7 @@ fn should_raise_deploy_authorization_failure() {
                 (Weight::new(0), Weight::new(0)), //args
             )
             .with_deploy_hash([8u8; 32])
-            .with_authorization_keys(&[
-                PublicKey::new(DEFAULT_ACCOUNT_ADDR),
-                PublicKey::new(key_1),
-                PublicKey::new(key_2),
-                PublicKey::new(key_3),
-            ])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_ADDR, key_1, key_2, key_3])
             .build();
         ExecuteRequestBuilder::from_deploy_item(deploy).build()
     };
@@ -298,21 +281,21 @@ fn should_authorize_deploy_with_multiple_keys() {
     // tests that authorized keys needs sufficient cumulative weight
     // and each of the associated keys is greater than threshold
 
-    let key_1 = [254; 32];
-    let key_2 = [253; 32];
+    let key_1 = PublicKey::ed25519_from([254; 32]);
+    let key_2 = PublicKey::ed25519_from([253; 32]);
     assert_ne!(DEFAULT_ACCOUNT_ADDR, key_1);
     assert_ne!(DEFAULT_ACCOUNT_ADDR, key_2);
 
     let exec_request_1 = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
         CONTRACT_ADD_UPDATE_ASSOCIATED_KEY,
-        (PublicKey::new(key_1),),
+        (key_1,),
     )
     .build();
     let exec_request_2 = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
         CONTRACT_ADD_UPDATE_ASSOCIATED_KEY,
-        (PublicKey::new(key_2),),
+        (key_2,),
     )
     .build();
     // Basic deploy with single key
@@ -346,13 +329,13 @@ fn should_authorize_deploy_with_multiple_keys() {
 fn should_not_authorize_deploy_with_duplicated_keys() {
     // tests that authorized keys needs sufficient cumulative weight
     // and each of the associated keys is greater than threshold
-    let key_1 = [254; 32];
+    let key_1 = PublicKey::ed25519_from([254; 32]);
     assert_ne!(DEFAULT_ACCOUNT_ADDR, key_1);
 
     let exec_request_1 = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
         CONTRACT_ADD_UPDATE_ASSOCIATED_KEY,
-        (PublicKey::new(key_1),),
+        (key_1,),
     )
     .build();
 
@@ -381,16 +364,7 @@ fn should_not_authorize_deploy_with_duplicated_keys() {
             .with_session_code("authorized_keys.wasm", (Weight::new(0), Weight::new(0)))
             .with_deploy_hash([3u8; 32])
             .with_authorization_keys(&[
-                PublicKey::new(key_1),
-                PublicKey::new(key_1),
-                PublicKey::new(key_1),
-                PublicKey::new(key_1),
-                PublicKey::new(key_1),
-                PublicKey::new(key_1),
-                PublicKey::new(key_1),
-                PublicKey::new(key_1),
-                PublicKey::new(key_1),
-                PublicKey::new(key_1),
+                key_1, key_1, key_1, key_1, key_1, key_1, key_1, key_1, key_1, key_1,
             ])
             .build();
         ExecuteRequestBuilder::from_deploy_item(deploy).build()

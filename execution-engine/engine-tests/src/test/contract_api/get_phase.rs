@@ -1,13 +1,15 @@
-use engine_test_support::low_level::{
-    DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR,
-    DEFAULT_GENESIS_CONFIG,
+use engine_test_support::{
+    internal::{
+        DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_GENESIS_CONFIG,
+    },
+    DEFAULT_ACCOUNT_ADDR,
 };
-use types::{account::PublicKey, Phase};
+use types::Phase;
 
 #[ignore]
 #[test]
 fn should_run_get_phase_contract() {
-    let default_account = PublicKey::new(DEFAULT_ACCOUNT_ADDR);
+    let default_account = DEFAULT_ACCOUNT_ADDR;
 
     let exec_request = {
         let deploy = DeployItemBuilder::new()

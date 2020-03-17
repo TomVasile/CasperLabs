@@ -14,19 +14,7 @@ use types::{
     CLType, CLTyped, CLValue, CLValueError, Key, U128, U256, U512,
 };
 
-use crate::stored_value::StoredValue;
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct TypeMismatch {
-    pub expected: String,
-    pub found: String,
-}
-
-impl TypeMismatch {
-    pub fn new(expected: String, found: String) -> TypeMismatch {
-        TypeMismatch { expected, found }
-    }
-}
+use crate::{stored_value::StoredValue, TypeMismatch};
 
 /// Error type for applying and combining transforms. A `TypeMismatch`
 /// occurs when a transform cannot be applied because the types are
@@ -311,7 +299,7 @@ pub mod gens {
 mod tests {
     use num::{Bounded, Num};
 
-    use types::{account::PurseId, AccessRights, ProtocolVersion, URef, U128, U256, U512};
+    use types::{account::PublicKey, AccessRights, ProtocolVersion, URef, U128, U256, U512};
 
     use super::*;
     use crate::{
@@ -320,6 +308,7 @@ mod tests {
     };
 
     const ZERO_ARRAY: [u8; 32] = [0; 32];
+    const ZERO_PUBLIC_KEY: PublicKey = PublicKey::ed25519_from(ZERO_ARRAY);
     const TEST_STR: &str = "a";
     const TEST_BOOL: bool = true;
 
@@ -451,9 +440,9 @@ mod tests {
 
         let uref = URef::new(ZERO_ARRAY, AccessRights::READ);
         let account = StoredValue::Account(Account::new(
-            ZERO_ARRAY,
+            ZERO_PUBLIC_KEY,
             BTreeMap::new(),
-            PurseId::new(uref),
+            uref,
             AssociatedKeys::default(),
             ActionThresholds::default(),
         ));

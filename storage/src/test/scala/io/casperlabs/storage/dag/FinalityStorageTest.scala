@@ -1,7 +1,9 @@
 package io.casperlabs.storage.dag
 
 import cats.implicits._
-import io.casperlabs.storage.block.BlockStorage.BlockHash
+import io.casperlabs.storage.SQLiteStorage
+import io.casperlabs.storage.block.BlockStorage
+import io.casperlabs.storage.BlockHash
 import io.casperlabs.storage.{ArbitraryStorageData, SQLiteFixture}
 import monix.eval.Task
 import org.scalatest.{Assertion, FlatSpec, Matchers}
@@ -10,7 +12,7 @@ class FinalityStorageTest
     extends FlatSpec
     with Matchers
     with ArbitraryStorageData
-    with SQLiteFixture[DagStorage[Task] with FinalityStorage[Task]] {
+    with SQLiteFixture[BlockStorage[Task] with DagStorage[Task] with FinalityStorage[Task]] {
 
   implicit val consensusConfig: ConsensusConfig = ConsensusConfig(
     dagSize = 5,
@@ -22,13 +24,16 @@ class FinalityStorageTest
     minPaymentCodeBytes = 1
   )
 
-  def withFinalityStorage[R](f: DagStorage[Task] with FinalityStorage[Task] => Task[R]): R =
+  def withFinalityStorage[R](
+      f: BlockStorage[Task] with DagStorage[Task] with FinalityStorage[Task] => Task[R]
+  ): R =
     runSQLiteTest[R](f)
 
   override def db: String = "/tmp/finality_storage.db"
 
-  override def createTestResource: Task[DagStorage[Task] with FinalityStorage[Task]] =
-    SQLiteDagStorage.create[Task](readXa = xa, writeXa = xa)
+  override def createTestResource
+      : Task[BlockStorage[Task] with DagStorage[Task] with FinalityStorage[Task]] =
+    SQLiteStorage.create[Task](readXa = xa, writeXa = xa)
 
   def finalityStatus(storage: FinalityStorage[Task], hashes: Seq[BlockHash]): Task[List[Boolean]] =
     hashes.toList.traverse(storage.isFinalized(_))
@@ -43,10 +48,12 @@ class FinalityStorageTest
     val sampleBlock = sample(arbBlock.arbitrary)
 
     for {
-      _ <- storage.insert(sampleBlock)
-      _ <- assertNotFinalized(storage, sampleBlock.blockHash)
-      _ <- storage.markAsFinalized(sampleBlock.blockHash, Set.empty)
-      _ <- assertFinalized(storage, sampleBlock.blockHash)
+      _    <- storage.insert(sampleBlock)
+      _    <- assertNotFinalized(storage, sampleBlock.blockHash)
+      _    <- storage.markAsFinalized(sampleBlock.blockHash, Set.empty)
+      _    <- assertFinalized(storage, sampleBlock.blockHash)
+      info <- storage.getBlockInfo(sampleBlock.blockHash)
+      _    = info.get.getStatus.isFinalized shouldBe true
     } yield ()
   }
 
@@ -67,7 +74,7 @@ class FinalityStorageTest
     storage =>
       val blocks = List.fill(10)(sample(arbBlock.arbitrary)).zipWithIndex.map {
         case (block, idx) =>
-          block.update(_.header.rank := idx.toLong)
+          block.update(_.header.jRank := idx.toLong)
       }
 
       for {

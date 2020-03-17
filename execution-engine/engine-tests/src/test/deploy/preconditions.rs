@@ -1,16 +1,19 @@
-use engine_test_support::low_level::{
-    utils, DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR,
-    DEFAULT_GENESIS_CONFIG, STANDARD_PAYMENT_CONTRACT,
+use engine_test_support::{
+    internal::{
+        utils, DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder,
+        DEFAULT_GENESIS_CONFIG, STANDARD_PAYMENT_CONTRACT,
+    },
+    DEFAULT_ACCOUNT_ADDR,
 };
 use types::{account::PublicKey, U512};
 
-const ACCOUNT_1_ADDR: [u8; 32] = [42u8; 32];
+const ACCOUNT_1_ADDR: PublicKey = PublicKey::ed25519_from([42u8; 32]);
 
 #[ignore]
 #[test]
 fn should_raise_precondition_authorization_failure_invalid_account() {
-    let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
-    let nonexistent_account_addr = [99u8; 32];
+    let account_1_public_key = ACCOUNT_1_ADDR;
+    let nonexistent_account_addr = PublicKey::ed25519_from([99u8; 32]);
     let payment_purse_amount = 10_000_000;
     let transferred_amount = 1;
 
@@ -24,7 +27,7 @@ fn should_raise_precondition_authorization_failure_invalid_account() {
             )
             .with_address(nonexistent_account_addr)
             .with_payment_code("standard_payment.wasm", (U512::from(payment_purse_amount),))
-            .with_authorization_keys(&[PublicKey::new(nonexistent_account_addr)])
+            .with_authorization_keys(&[nonexistent_account_addr])
             .build();
 
         ExecuteRequestBuilder::new().push_deploy(deploy).build()
@@ -51,6 +54,7 @@ fn should_raise_precondition_authorization_failure_invalid_account() {
 #[ignore]
 #[test]
 fn should_raise_precondition_authorization_failure_empty_authorized_keys() {
+    let empty_keys: [PublicKey; 0] = [];
     let exec_request = {
         let deploy = DeployItemBuilder::new()
             .with_address(DEFAULT_ACCOUNT_ADDR)
@@ -58,7 +62,7 @@ fn should_raise_precondition_authorization_failure_empty_authorized_keys() {
             .with_payment_code(STANDARD_PAYMENT_CONTRACT, ())
             .with_deploy_hash([1; 32])
             // empty authorization keys to force error
-            .with_authorization_keys(&[])
+            .with_authorization_keys(&empty_keys)
             .build();
 
         ExecuteRequestBuilder::new().push_deploy(deploy).build()
@@ -85,8 +89,8 @@ fn should_raise_precondition_authorization_failure_empty_authorized_keys() {
 #[ignore]
 #[test]
 fn should_raise_precondition_authorization_failure_invalid_authorized_keys() {
-    let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
-    let nonexistent_account_addr = [99u8; 32];
+    let account_1_public_key = ACCOUNT_1_ADDR;
+    let nonexistent_account_addr = PublicKey::ed25519_from([99u8; 32]);
     let payment_purse_amount = 10_000_000;
     let transferred_amount = 1;
 
@@ -100,7 +104,7 @@ fn should_raise_precondition_authorization_failure_invalid_authorized_keys() {
             )
             .with_payment_code("standard_payment.wasm", (U512::from(payment_purse_amount),))
             // invalid authorization key to force error
-            .with_authorization_keys(&[PublicKey::new(nonexistent_account_addr)])
+            .with_authorization_keys(&[nonexistent_account_addr])
             .build();
 
         ExecuteRequestBuilder::new().push_deploy(deploy).build()

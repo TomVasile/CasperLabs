@@ -6,13 +6,14 @@ use rand::{
     Rng,
 };
 
-use engine_shared::{motes::Motes, newtypes::Blake2bHash, transform::TypeMismatch};
+use engine_shared::{motes::Motes, newtypes::Blake2bHash, TypeMismatch};
 use engine_storage::global_state::CommitResult;
 use engine_wasm_prep::wasm_costs::WasmCosts;
 use types::{account::PublicKey, bytesrepr, Key, ProtocolVersion, U512};
 
 use crate::engine_state::execution_effect::ExecutionEffect;
 
+pub const PLACEHOLDER_KEY: Key = Key::Hash([0u8; 32]);
 pub const POS_BONDING_PURSE: &str = "pos_bonding_purse";
 pub const POS_PAYMENT_PURSE: &str = "pos_payment_purse";
 pub const POS_REWARDS_PURSE: &str = "pos_rewards_purse";
@@ -91,7 +92,7 @@ impl GenesisAccount {
 
 impl Distribution<GenesisAccount> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> GenesisAccount {
-        let public_key = PublicKey::new(rng.gen());
+        let public_key = PublicKey::ed25519_from(rng.gen());
 
         let mut u512_array = [0u8; 64];
         rng.fill_bytes(u512_array.as_mut());
@@ -115,17 +116,20 @@ pub struct GenesisConfig {
     protocol_version: ProtocolVersion,
     mint_installer_bytes: Vec<u8>,
     proof_of_stake_installer_bytes: Vec<u8>,
+    standard_payment_installer_bytes: Vec<u8>,
     accounts: Vec<GenesisAccount>,
     wasm_costs: WasmCosts,
 }
 
 impl GenesisConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         timestamp: u64,
         protocol_version: ProtocolVersion,
         mint_installer_bytes: Vec<u8>,
         proof_of_stake_installer_bytes: Vec<u8>,
+        standard_payment_installer_bytes: Vec<u8>,
         accounts: Vec<GenesisAccount>,
         wasm_costs: WasmCosts,
     ) -> Self {
@@ -135,6 +139,7 @@ impl GenesisConfig {
             protocol_version,
             mint_installer_bytes,
             proof_of_stake_installer_bytes,
+            standard_payment_installer_bytes,
             accounts,
             wasm_costs,
         }
@@ -160,6 +165,10 @@ impl GenesisConfig {
         self.proof_of_stake_installer_bytes.as_slice()
     }
 
+    pub fn standard_payment_installer_bytes(&self) -> &[u8] {
+        self.standard_payment_installer_bytes.as_slice()
+    }
+
     pub fn wasm_costs(&self) -> WasmCosts {
         self.wasm_costs
     }
@@ -181,6 +190,10 @@ impl GenesisConfig {
     pub fn accounts(&self) -> &[GenesisAccount] {
         self.accounts.as_slice()
     }
+
+    pub fn push_account(&mut self, account: GenesisAccount) {
+        self.accounts.push(account);
+    }
 }
 
 impl Distribution<GenesisConfig> for Standard {
@@ -200,6 +213,10 @@ impl Distribution<GenesisConfig> for Standard {
 
         count = rng.gen_range(1000, 10_000);
         let proof_of_stake_installer_bytes =
+            iter::repeat(()).map(|_| rng.gen()).take(count).collect();
+
+        count = rng.gen_range(1000, 10_000);
+        let standard_payment_installer_bytes =
             iter::repeat(()).map(|_| rng.gen()).take(count).collect();
 
         count = rng.gen_range(1, 10);
@@ -224,6 +241,7 @@ impl Distribution<GenesisConfig> for Standard {
             protocol_version,
             mint_installer_bytes,
             proof_of_stake_installer_bytes,
+            standard_payment_installer_bytes,
             accounts,
             wasm_costs,
         }

@@ -2,8 +2,8 @@ use proptest::{arbitrary, array, collection, prop_oneof, strategy::Strategy};
 
 use engine_shared::{make_array_newtype, newtypes::Blake2bHash};
 use types::{
-    bytesrepr::{self, FromBytes, ToBytes},
-    gens, URef, LOCAL_SEED_LENGTH,
+    bytesrepr::{self, FromBytes, ToBytes, U8_SERIALIZED_LENGTH},
+    gens, URef, KEY_LOCAL_SEED_LENGTH,
 };
 
 use super::{HashedTrie, TestValue};
@@ -76,8 +76,7 @@ pub enum PublicKey {
 
 impl ToBytes for PublicKey {
     fn to_bytes(&self) -> Result<Vec<u8>, bytesrepr::Error> {
-        // TODO: use Vec::with_capacity
-        let mut ret = Vec::new();
+        let mut ret = bytesrepr::allocate_buffer(self)?;
         match self {
             PublicKey::Basic(key) => {
                 ret.push(PUBLIC_KEY_BASIC_ID);
@@ -97,6 +96,16 @@ impl ToBytes for PublicKey {
             }
         };
         Ok(ret)
+    }
+
+    fn serialized_length(&self) -> usize {
+        U8_SERIALIZED_LENGTH
+            + match self {
+                PublicKey::Basic(key) => key.serialized_length(),
+                PublicKey::Similar(key) => key.serialized_length(),
+                PublicKey::Fancy(key) => key.serialized_length(),
+                PublicKey::Long(key) => key.serialized_length(),
+            }
     }
 }
 
@@ -120,7 +129,7 @@ impl FromBytes for PublicKey {
                 let (key, rem): (Long, &[u8]) = FromBytes::from_bytes(rem)?;
                 Ok((PublicKey::Long(key), rem))
             }
-            _ => Err(bytesrepr::Error::FormattingError),
+            _ => Err(bytesrepr::Error::Formatting),
         }
     }
 }
@@ -143,7 +152,7 @@ pub enum TestKey {
 }
 
 impl TestKey {
-    pub fn local(seed: [u8; LOCAL_SEED_LENGTH], key_bytes: &[u8]) -> Self {
+    pub fn local(seed: [u8; KEY_LOCAL_SEED_LENGTH], key_bytes: &[u8]) -> Self {
         let bytes_to_hash: Vec<u8> = seed.iter().chain(key_bytes.iter()).copied().collect();
         let hash: [u8; KEY_LOCAL_LENGTH] = Blake2bHash::new(&bytes_to_hash).into();
         TestKey::Local(hash)
@@ -174,6 +183,16 @@ impl ToBytes for TestKey {
         }
         Ok(ret)
     }
+
+    fn serialized_length(&self) -> usize {
+        U8_SERIALIZED_LENGTH
+            + match self {
+                TestKey::Account(public_key) => public_key.serialized_length(),
+                TestKey::Hash(hash) => hash.serialized_length(),
+                TestKey::URef(uref) => uref.serialized_length(),
+                TestKey::Local(local) => local.serialized_length(),
+            }
+    }
 }
 
 impl FromBytes for TestKey {
@@ -196,7 +215,7 @@ impl FromBytes for TestKey {
                 let (local, rem): ([u8; KEY_LOCAL_LENGTH], &[u8]) = FromBytes::from_bytes(rem)?;
                 Ok((TestKey::Local(local), rem))
             }
-            _ => Err(bytesrepr::Error::FormattingError),
+            _ => Err(bytesrepr::Error::Formatting),
         }
     }
 }

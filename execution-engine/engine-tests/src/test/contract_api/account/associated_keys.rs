@@ -1,19 +1,21 @@
 use lazy_static::lazy_static;
 
-use engine_shared::account::Account;
-use engine_test_support::low_level::{
-    utils, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR,
-    DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT,
+use engine_test_support::{
+    internal::{
+        ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT,
+    },
+    DEFAULT_ACCOUNT_ADDR,
 };
 use types::{
     account::{PublicKey, Weight},
-    Key, U512,
+    U512,
 };
 
 const CONTRACT_ADD_UPDATE_ASSOCIATED_KEY: &str = "add_update_associated_key.wasm";
 const CONTRACT_REMOVE_ASSOCIATED_KEY: &str = "remove_associated_key.wasm";
 const CONTRACT_TRANSFER_PURSE_TO_ACCOUNT: &str = "transfer_purse_to_account.wasm";
-const ACCOUNT_1_ADDR: [u8; 32] = [1u8; 32];
+const ACCOUNT_1_ADDR: PublicKey = PublicKey::ed25519_from([1u8; 32]);
+
 lazy_static! {
     static ref ACCOUNT_1_INITIAL_FUND: U512 = *DEFAULT_PAYMENT * 10;
 }
@@ -37,23 +39,20 @@ fn should_manage_associated_key() {
         (DEFAULT_ACCOUNT_ADDR,),
     )
     .build();
-    let builder = builder
+
+    builder
         .run_genesis(&DEFAULT_GENESIS_CONFIG)
         .exec(exec_request_1)
         .expect_success()
-        .commit()
-        .exec(exec_request_2)
-        .expect_success()
         .commit();
 
-    let account_key = Key::Account(ACCOUNT_1_ADDR);
-    let genesis_key = PublicKey::new(DEFAULT_ACCOUNT_ADDR);
+    builder.exec(exec_request_2).expect_success().commit();
 
-    let account_1: Account = {
-        let tmp = builder.clone();
-        let transforms = tmp.get_transforms();
-        utils::get_account(&transforms[1], &account_key).expect("should get account")
-    };
+    let genesis_key = DEFAULT_ACCOUNT_ADDR;
+
+    let account_1 = builder
+        .get_account(ACCOUNT_1_ADDR)
+        .expect("should have account");
 
     let gen_weight = account_1
         .get_associated_key_weight(genesis_key)
@@ -71,17 +70,13 @@ fn should_manage_associated_key() {
 
     builder.exec(exec_request_3).expect_success().commit();
 
-    let account_1: Account = {
-        let tmp = builder.clone();
-        let transforms = tmp.get_transforms();
-        utils::get_account(&transforms[2], &account_key).expect("should get account")
-    };
+    let account_1 = builder
+        .get_account(ACCOUNT_1_ADDR)
+        .expect("should have account");
 
-    assert_eq!(
-        account_1.get_associated_key_weight(genesis_key),
-        None,
-        "key should be removed"
-    );
+    let new_weight = account_1.get_associated_key_weight(genesis_key);
+
+    assert_eq!(new_weight, None, "key should be removed");
 
     let is_error = builder.is_error();
     assert!(!is_error);

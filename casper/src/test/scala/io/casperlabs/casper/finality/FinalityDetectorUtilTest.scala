@@ -12,8 +12,14 @@ import monix.eval.Task
 import org.scalatest.FlatSpec
 import io.casperlabs.casper.scalatestcontrib._
 import io.casperlabs.models.Message
-import io.casperlabs.storage.dag.DagRepresentation
+import io.casperlabs.storage.dag.{
+  DagRepresentation,
+  EraTipRepresentation,
+  FinalityStorage,
+  GlobalTipRepresentation
+}
 import io.casperlabs.storage.dag.DagRepresentation.Validator
+import io.casperlabs.casper.mocks.MockFinalityStorage
 
 class FinalityDetectorUtilTest extends FlatSpec with BlockGenerator with StorageFixture {
 
@@ -40,9 +46,11 @@ class FinalityDetectorUtilTest extends FlatSpec with BlockGenerator with Storage
           a1      <- createAndStoreBlockFull[Task](v2, Seq(a), Seq.empty, bonds)
           b       <- createAndStoreBlockFull[Task](v1, Seq(a, a1), Seq.empty, bonds)
           dag     <- dagStorage.getRepresentation
+          implicit0(finalityStorage: FinalityStorage[Task]) <- MockFinalityStorage[Task](
+                                                                Seq(genesis.blockHash, a.blockHash): _*
+                                                              )
           finalizedIndirectly <- FinalityDetectorUtil.finalizedIndirectly[Task](
                                   b.blockHash,
-                                  Set(genesis.blockHash, a.blockHash),
                                   dag
                                 )
         } yield assert(finalizedIndirectly == Set(a1.blockHash))
@@ -82,10 +90,12 @@ class FinalityDetectorUtilTest extends FlatSpec with BlockGenerator with Storage
           c.blockHash -> 1,
           a.blockHash -> 1
         )
+        implicit0(finalityStorage: FinalityStorage[G]) <- MockFinalityStorage[G](
+                                                           Seq(genesis.blockHash): _*
+                                                         ).runA(Map.empty)
         _ <- FinalityDetectorUtil
               .finalizedIndirectly[G](
                 c.blockHash,
-                Set(genesis.blockHash),
                 stateTDag
               )
               .run(Map.empty) shouldBeF ((expectedNodesVisitedA, Set(a.blockHash)))
@@ -99,10 +109,10 @@ class FinalityDetectorUtilTest extends FlatSpec with BlockGenerator with Storage
           e -> 1,
           b -> 1
         ).map(p => (p._1.blockHash, p._2))
+        _ <- finalityStorage.markAsFinalized(c.blockHash, Set(a.blockHash)).run(Map.empty)
         _ <- FinalityDetectorUtil
               .finalizedIndirectly[G](
                 f.blockHash,
-                Set(c.blockHash, a.blockHash, genesis.blockHash),
                 stateTDag
               )
               .run(Map.empty) shouldBeF (
@@ -155,18 +165,21 @@ object FinalityDetectorUtilTest {
           tailLength: Int
       ): fs2.Stream[StateT[F, Map[BlockHash, Int], *], Vector[BlockInfo]] = ???
 
-      override def latestMessageHash(
-          validator: Validator
-      ): StateT[F, Map[BlockHash, Int], Set[BlockHash]] = ???
+      override def getBlockInfosByValidator(
+          validator: Validator,
+          limit: Int,
+          lastTimeStamp: Level,
+          lastBlockHash: BlockHash
+      ) = ???
 
-      override def latestMessage(
-          validator: Validator
-      ): StateT[F, Map[BlockHash, Int], Set[Message]] = ???
-
-      override def latestMessageHashes
-          : StateT[F, Map[BlockHash, Int], Map[Validator, Set[BlockHash]]] = ???
-
-      override def latestMessages: StateT[F, Map[BlockHash, Int], Map[Validator, Set[Message]]] =
+      override def latestGlobal: StateT[F, Map[BlockHash, Int], GlobalTipRepresentation[
+        StateT[F, Map[BlockHash, Int], *]
+      ]] =
         ???
+      override def latestInEra(
+          keyBlockHash: BlockHash
+      ): StateT[F, Map[BlockHash, Int], EraTipRepresentation[StateT[F, Map[BlockHash, Int], *]]] =
+        ???
+
     }
 }

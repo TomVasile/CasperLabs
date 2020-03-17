@@ -18,11 +18,12 @@ use engine_shared::{
 use engine_storage::{global_state::StateReader, protocol_data::ProtocolData};
 use types::{
     account::{
-        ActionType, AddKeyFailure, PublicKey, PurseId, RemoveKeyFailure, SetThresholdFailure,
+        ActionType, AddKeyFailure, PublicKey, RemoveKeyFailure, SetThresholdFailure,
         UpdateKeyFailure, Weight,
     },
     bytesrepr::{self, ToBytes},
-    AccessRights, BlockTime, CLType, CLValue, Key, Phase, ProtocolVersion, URef, LOCAL_SEED_LENGTH,
+    AccessRights, BlockTime, CLType, CLValue, Key, Phase, ProtocolVersion, URef,
+    KEY_LOCAL_SEED_LENGTH,
 };
 
 use crate::{
@@ -40,7 +41,7 @@ mod tests;
 /// System account transfers given URefs into READ_ADD_WRITE access rights,
 /// and any other URef is transformed into READ only URef.
 pub(crate) fn attenuate_uref_for_account(account: &Account, uref: URef) -> URef {
-    if account.pub_key() == SYSTEM_ACCOUNT_ADDR {
+    if account.public_key() == SYSTEM_ACCOUNT_ADDR {
         // If the system account calls this function, it is given READ_ADD_WRITE access.
         uref.into_read_add_write()
     } else {
@@ -194,7 +195,7 @@ where
                 self.named_keys.remove(name);
                 self.remove_key_from_contract(contract_hash, contract, name)
             }
-            contract_local @ Key::Local(_) => {
+            contract_local @ Key::Local { .. } => {
                 let contract: Contract = self.read_gs_typed(&contract_local)?;
                 self.named_keys.remove(name);
                 self.remove_key_from_contract(contract_local, contract, name)
@@ -203,7 +204,7 @@ where
     }
 
     pub fn get_caller(&self) -> PublicKey {
-        self.account.pub_key().into()
+        self.account.public_key()
     }
 
     pub fn get_blocktime(&self) -> BlockTime {
@@ -254,12 +255,12 @@ where
         self.base_key
     }
 
-    pub fn seed(&self) -> [u8; LOCAL_SEED_LENGTH] {
+    pub fn seed(&self) -> [u8; KEY_LOCAL_SEED_LENGTH] {
         match self.base_key {
-            Key::Account(bytes) => bytes,
+            Key::Account(PublicKey::Ed25519(bytes)) => bytes.value(),
             Key::Hash(bytes) => bytes,
             Key::URef(uref) => uref.addr(),
-            Key::Local(hash) => hash,
+            Key::Local { seed, .. } => seed,
         }
     }
 
@@ -326,7 +327,7 @@ where
     /// DO NOT EXPOSE THIS VIA THE FFI
     pub fn read_ls_with_seed(
         &mut self,
-        seed: [u8; LOCAL_SEED_LENGTH],
+        seed: [u8; KEY_LOCAL_SEED_LENGTH],
         key_bytes: &[u8],
     ) -> Result<Option<CLValue>, Error> {
         let key = Key::local(seed, key_bytes);
@@ -449,13 +450,12 @@ where
     }
 
     pub fn insert_uref(&mut self, uref: URef) {
-        if let Some(rights) = uref.access_rights() {
-            let entry = self
-                .access_rights
-                .entry(uref.addr())
-                .or_insert_with(|| std::iter::empty().collect());
-            entry.insert(rights);
-        }
+        let rights = uref.access_rights();
+        let entry = self
+            .access_rights
+            .entry(uref.addr())
+            .or_insert_with(|| std::iter::empty().collect());
+        entry.insert(rights);
     }
 
     pub fn effect(&self) -> ExecutionEffect {
@@ -527,33 +527,28 @@ where
     }
 
     pub fn validate_uref(&self, uref: &URef) -> Result<(), Error> {
-        if self.account.purse_id().value().addr() == uref.addr() {
+        if self.account.main_purse().addr() == uref.addr() {
             // If passed uref matches account's purse then we have to also validate their
             // access rights.
-            if let Some(rights) = self.account.purse_id().value().access_rights() {
-                if let Some(uref_rights) = uref.access_rights() {
-                    // Access rights of the passed uref, and the account's purse_id should match
-                    if rights & uref_rights == uref_rights {
-                        return Ok(());
-                    }
-                }
+            let rights = self.account.main_purse().access_rights();
+            let uref_rights = uref.access_rights();
+            // Access rights of the passed uref, and the account's purse should match
+            if rights & uref_rights == uref_rights {
+                return Ok(());
             }
         }
 
         // Check if the `key` is known
         if let Some(known_rights) = self.access_rights.get(&uref.addr()) {
-            if let Some(new_rights) = uref.access_rights() {
-                // check if we have sufficient access rights
-                if known_rights
-                    .iter()
-                    .any(|right| *right & new_rights == new_rights)
-                {
-                    Ok(())
-                } else {
-                    Err(Error::ForgedReference(*uref))
-                }
+            let new_rights = uref.access_rights();
+            // check if we have sufficient access rights
+            if known_rights
+                .iter()
+                .any(|right| *right & new_rights == new_rights)
+            {
+                Ok(())
             } else {
-                Ok(()) // uref is known and no additional rights are needed
+                Err(Error::ForgedReference(*uref))
             }
         } else {
             // uref is not known
@@ -609,7 +604,7 @@ where
             Key::Account(_) => &self.base_key() == key,
             Key::Hash(_) => true,
             Key::URef(uref) => uref.is_readable(),
-            Key::Local(_) => false,
+            Key::Local { .. } => false,
         }
     }
 
@@ -618,7 +613,7 @@ where
         match key {
             Key::Account(_) | Key::Hash(_) => &self.base_key() == key,
             Key::URef(uref) => uref.is_addable(),
-            Key::Local(_) => false,
+            Key::Local { .. } => false,
         }
     }
 
@@ -627,7 +622,7 @@ where
         match key {
             Key::Account(_) | Key::Hash(_) => false,
             Key::URef(uref) => uref.is_writeable(),
-            Key::Local(_) => false,
+            Key::Local { .. } => false,
         }
     }
 
@@ -680,7 +675,7 @@ where
         }
 
         // Converts an account's public key into a URef
-        let key = Key::Account(self.account().pub_key());
+        let key = Key::Account(self.account().public_key());
 
         // Take an account out of the global state
         let account = {
@@ -716,7 +711,7 @@ where
         }
 
         // Converts an account's public key into a URef
-        let key = Key::Account(self.account().pub_key());
+        let key = Key::Account(self.account().public_key());
 
         // Take an account out of the global state
         let mut account: Account = self.read_gs_typed(&key)?;
@@ -754,7 +749,7 @@ where
         }
 
         // Converts an account's public key into a URef
-        let key = Key::Account(self.account().pub_key());
+        let key = Key::Account(self.account().public_key());
 
         // Take an account out of the global state
         let mut account: Account = self.read_gs_typed(&key)?;
@@ -792,7 +787,7 @@ where
         }
 
         // Converts an account's public key into a URef
-        let key = Key::Account(self.account().pub_key());
+        let key = Key::Account(self.account().public_key());
 
         // Take an account out of the global state
         let mut account: Account = self.read_gs_typed(&key)?;
@@ -834,7 +829,7 @@ where
     ///
     /// If the account is system account, then given URef receives
     /// full rights (READ_ADD_WRITE). Otherwise READ access is returned.
-    pub(crate) fn attenuate_uref(&mut self, uref: URef) -> URef {
+    pub(crate) fn attenuate_uref(&self, uref: URef) -> URef {
         attenuate_uref_for_account(&self.account(), uref)
     }
 
@@ -847,14 +842,14 @@ where
 
     /// Checks if the account context is valid.
     fn is_valid_context(&self) -> bool {
-        self.base_key() == Key::Account(self.account().pub_key())
+        self.base_key() == Key::Account(self.account().public_key())
     }
 
     /// Gets main purse id
-    pub fn get_main_purse(&self) -> Result<PurseId, Error> {
+    pub fn get_main_purse(&self) -> Result<URef, Error> {
         if !self.is_valid_context() {
             return Err(Error::InvalidContext);
         }
-        Ok(self.account().purse_id())
+        Ok(self.account().main_purse())
     }
 }

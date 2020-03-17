@@ -361,6 +361,10 @@ private[configuration] final case class Options private (
       gen[Int]("Maximum DAG depth to ask in iterative requests during syncing.")
 
     @scallop
+    val serverSyncDisableValidations =
+      gen[Flag]("Disable DAG shape validations during synchronization.")
+
+    @scallop
     val serverInitSyncMaxNodes =
       gen[Int]("Maximum number of nodes to try to sync with initially in a round.")
 
@@ -524,6 +528,30 @@ private[configuration] final case class Options private (
       gen[String](
         "Name of the algorithm to use for signing proposed blocks. " +
           s"Currently supported values: ed25519."
+      )
+
+    @scallop
+    val highwayEnabled =
+      gen[Flag](
+        "Use highway, or stick to NCB."
+      )
+
+    @scallop
+    val highwayOmegaMessageTimeStart =
+      gen[Double](
+        "Fraction of time through the round after which we can create an omega message."
+      )
+
+    @scallop
+    val highwayOmegaMessageTimeEnd =
+      gen[Double](
+        "Fraction of time through the round before which we must have created the omega message."
+      )
+
+    @scallop
+    val highwayInitRoundExponent =
+      gen[Int](
+        "Initial round exponent to start the node with, before auto-adjustment takes over; corresponds to the tick unit of the chain."
       )
 
     @scallop

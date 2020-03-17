@@ -1,13 +1,15 @@
 use engine_shared::stored_value::StoredValue;
-use engine_test_support::low_level::{
-    ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG,
-    DEFAULT_PAYMENT,
+use engine_test_support::{
+    internal::{
+        ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT,
+    },
+    DEFAULT_ACCOUNT_ADDR,
 };
-use types::Key;
+use types::{account::PublicKey, Key};
 
 const CONTRACT_MAIN_PURSE: &str = "main_purse.wasm";
 const CONTRACT_TRANSFER_PURSE_TO_ACCOUNT: &str = "transfer_purse_to_account.wasm";
-const ACCOUNT_1_ADDR: [u8; 32] = [1u8; 32];
+const ACCOUNT_1_ADDR: PublicKey = PublicKey::ed25519_from([1u8; 32]);
 
 #[ignore]
 #[test]
@@ -16,7 +18,7 @@ fn should_run_main_purse_contract_default_account() {
 
     let builder = builder.run_genesis(&DEFAULT_GENESIS_CONFIG);
 
-    let default_account = if let Some(StoredValue::Account(account)) =
+    let default_account = if let Ok(StoredValue::Account(account)) =
         builder.query(None, Key::Account(DEFAULT_ACCOUNT_ADDR), &[])
     {
         account
@@ -27,7 +29,7 @@ fn should_run_main_purse_contract_default_account() {
     let exec_request = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
         CONTRACT_MAIN_PURSE,
-        (default_account.purse_id(),),
+        (default_account.main_purse(),),
     )
     .build();
 
@@ -59,7 +61,7 @@ fn should_run_main_purse_contract_account_1() {
     let exec_request_2 = ExecuteRequestBuilder::standard(
         ACCOUNT_1_ADDR,
         CONTRACT_MAIN_PURSE,
-        (account_1.purse_id(),),
+        (account_1.main_purse(),),
     )
     .build();
 

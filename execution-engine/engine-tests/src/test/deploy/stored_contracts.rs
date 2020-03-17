@@ -1,18 +1,18 @@
-use std::collections::{hash_map::RandomState, BTreeMap};
+use std::collections::BTreeMap;
 
 use engine_core::engine_state::{upgrade::ActivationPoint, CONV_RATE};
 use engine_grpc_server::engine_server::ipc::DeployCode;
-use engine_shared::{
-    additive_map::AdditiveMap, motes::Motes, stored_value::StoredValue, transform::Transform,
-};
-use engine_test_support::low_level::{
-    utils, AdditiveMapDiff, DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder,
-    UpgradeRequestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_ACCOUNT_INITIAL_BALANCE,
-    DEFAULT_ACCOUNT_KEY, DEFAULT_GENESIS_CONFIG,
+use engine_shared::{motes::Motes, stored_value::StoredValue, transform::Transform};
+use engine_test_support::{
+    internal::{
+        utils, AdditiveMapDiff, DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder,
+        UpgradeRequestBuilder, DEFAULT_ACCOUNT_KEY, DEFAULT_GENESIS_CONFIG,
+    },
+    DEFAULT_ACCOUNT_ADDR, DEFAULT_ACCOUNT_INITIAL_BALANCE,
 };
 use types::{account::PublicKey, Key, ProtocolVersion, U512};
 
-const ACCOUNT_1_ADDR: [u8; 32] = [42u8; 32];
+const ACCOUNT_1_ADDR: PublicKey = PublicKey::ed25519_from([42u8; 32]);
 const DEFAULT_ACTIVATION_POINT: ActivationPoint = 1;
 const DO_NOTHING_NAME: &str = "do_nothing";
 const DO_NOTHING_STORED_CONTRACT_NAME: &str = "do_nothing_stored";
@@ -52,7 +52,7 @@ fn should_exec_non_stored_code() {
     // using the new execute logic, passing code for both payment and session
     // should work exactly as it did with the original exec logic
 
-    let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
+    let account_1_public_key = ACCOUNT_1_ADDR;
     let payment_purse_amount = 10_000_000;
     let transferred_amount = 1;
 
@@ -67,7 +67,7 @@ fn should_exec_non_stored_code() {
                 &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([1; 32])
             .build();
 
@@ -82,7 +82,7 @@ fn should_exec_non_stored_code() {
     let default_account = builder
         .get_account(DEFAULT_ACCOUNT_ADDR)
         .expect("should get genesis account");
-    let modified_balance: U512 = builder.get_purse_balance(default_account.purse_id());
+    let modified_balance: U512 = builder.get_purse_balance(default_account.main_purse());
 
     let initial_balance: U512 = U512::from(DEFAULT_ACCOUNT_INITIAL_BALANCE);
 
@@ -124,45 +124,29 @@ fn should_exec_stored_code_by_hash() {
     let mut builder = InMemoryWasmTestBuilder::default();
     builder.run_genesis(&*DEFAULT_GENESIS_CONFIG);
 
-    let test_result = builder.exec_commit_finish(exec_request);
+    builder.exec_commit_finish(exec_request);
 
-    let response = test_result
-        .builder()
+    let default_account = builder
+        .get_account(DEFAULT_ACCOUNT_ADDR)
+        .expect("should have account");
+    let stored_payment_contract_hash = default_account
+        .named_keys()
+        .get(STANDARD_PAYMENT_CONTRACT_NAME)
+        .expect("stored_payment_contract_hash should exist")
+        .into_hash()
+        .expect("should be a hash");
+
+    let response = builder
         .get_exec_response(0)
         .expect("there should be a response")
         .clone();
-
-    let transforms = &test_result.builder().get_transforms()[0];
-
-    // find the contract write transform, then get the hash from its key
-    let stored_payment_contract_hash = {
-        let mut ret = None;
-        for (k, t) in transforms {
-            if let Transform::Write(StoredValue::Contract(_)) = t {
-                if let Key::Hash(hash) = k {
-                    ret = Some(hash);
-                    break;
-                }
-            }
-        }
-        ret
-    };
-
-    assert_ne!(
-        stored_payment_contract_hash, None,
-        "stored_payment_contract_hash should exist"
-    );
-
     let mut result = utils::get_success_result(&response);
     let gas = result.cost();
     let motes_alpha = Motes::from_gas(gas, CONV_RATE).expect("should have motes");
 
-    let default_account = builder
-        .get_account(DEFAULT_ACCOUNT_ADDR)
-        .expect("should get genesis account");
-    let modified_balance_alpha: U512 = builder.get_purse_balance(default_account.purse_id());
+    let modified_balance_alpha: U512 = builder.get_purse_balance(default_account.main_purse());
 
-    let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
+    let account_1_public_key = ACCOUNT_1_ADDR;
     let transferred_amount = 1;
 
     // next make another deploy that USES stored payment logic
@@ -174,26 +158,23 @@ fn should_exec_stored_code_by_hash() {
                 (account_1_public_key, U512::from(transferred_amount)),
             )
             .with_stored_payment_hash(
-                stored_payment_contract_hash
-                    .expect("hash should exist")
-                    .to_vec(),
+                stored_payment_contract_hash.to_vec(),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2; 32])
             .build();
 
         ExecuteRequestBuilder::new().push_deploy(deploy).build()
     };
 
-    let test_result = builder.exec_commit_finish(exec_request_stored_payment);
+    builder.exec_commit_finish(exec_request_stored_payment);
 
-    let modified_balance_bravo: U512 = builder.get_purse_balance(default_account.purse_id());
+    let modified_balance_bravo: U512 = builder.get_purse_balance(default_account.main_purse());
 
     let initial_balance: U512 = U512::from(DEFAULT_ACCOUNT_INITIAL_BALANCE);
 
-    let response = test_result
-        .builder()
+    let response = builder
         .get_exec_response(1)
         .expect("there should be a response")
         .clone();
@@ -254,9 +235,9 @@ fn should_exec_stored_code_by_named_hash() {
     let default_account = builder
         .get_account(DEFAULT_ACCOUNT_ADDR)
         .expect("should get genesis account");
-    let modified_balance_alpha: U512 = builder.get_purse_balance(default_account.purse_id());
+    let modified_balance_alpha: U512 = builder.get_purse_balance(default_account.main_purse());
 
-    let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
+    let account_1_public_key = ACCOUNT_1_ADDR;
     let transferred_amount = 1;
 
     // next make another deploy that USES stored payment logic
@@ -271,7 +252,7 @@ fn should_exec_stored_code_by_named_hash() {
                 STANDARD_PAYMENT_CONTRACT_NAME,
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2; 32])
             .build();
 
@@ -283,7 +264,7 @@ fn should_exec_stored_code_by_named_hash() {
     let default_account = builder
         .get_account(DEFAULT_ACCOUNT_ADDR)
         .expect("should get genesis account");
-    let modified_balance_bravo: U512 = builder.get_purse_balance(default_account.purse_id());
+    let modified_balance_bravo: U512 = builder.get_purse_balance(default_account.main_purse());
 
     let initial_balance: U512 = U512::from(DEFAULT_ACCOUNT_INITIAL_BALANCE);
 
@@ -335,7 +316,7 @@ fn should_exec_stored_code_by_named_uref() {
                 &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([1; 32])
             .build();
 
@@ -360,9 +341,9 @@ fn should_exec_stored_code_by_named_uref() {
     let default_account = builder
         .get_account(DEFAULT_ACCOUNT_ADDR)
         .expect("should get genesis account");
-    let modified_balance_alpha: U512 = builder.get_purse_balance(default_account.purse_id());
+    let modified_balance_alpha: U512 = builder.get_purse_balance(default_account.main_purse());
 
-    let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
+    let account_1_public_key = ACCOUNT_1_ADDR;
     let transferred_amount = 1;
 
     // next make another deploy that USES stored session logic
@@ -377,7 +358,7 @@ fn should_exec_stored_code_by_named_uref() {
                 &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2; 32])
             .build();
 
@@ -386,7 +367,7 @@ fn should_exec_stored_code_by_named_uref() {
 
     let test_result = builder.exec_commit_finish(exec_request_stored_session);
 
-    let modified_balance_bravo: U512 = builder.get_purse_balance(default_account.purse_id());
+    let modified_balance_bravo: U512 = builder.get_purse_balance(default_account.main_purse());
 
     let initial_balance: U512 = U512::from(DEFAULT_ACCOUNT_INITIAL_BALANCE);
 
@@ -461,7 +442,7 @@ fn should_exec_payment_and_session_stored_code() {
                 STANDARD_PAYMENT_CONTRACT_NAME,
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2; 32])
             .build();
 
@@ -480,7 +461,7 @@ fn should_exec_payment_and_session_stored_code() {
     let gas = result.cost();
     let motes_bravo = Motes::from_gas(gas, CONV_RATE).expect("should have motes");
 
-    let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
+    let account_1_public_key = ACCOUNT_1_ADDR;
     let transferred_amount = 1;
 
     // next make another deploy that USES stored payment logic & stored transfer
@@ -496,7 +477,7 @@ fn should_exec_payment_and_session_stored_code() {
                 STANDARD_PAYMENT_CONTRACT_NAME,
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([3; 32])
             .build();
 
@@ -518,7 +499,7 @@ fn should_exec_payment_and_session_stored_code() {
     let default_account = builder
         .get_account(DEFAULT_ACCOUNT_ADDR)
         .expect("should get genesis account");
-    let modified_balance: U512 = builder.get_purse_balance(default_account.purse_id());
+    let modified_balance: U512 = builder.get_purse_balance(default_account.main_purse());
 
     let initial_balance: U512 = U512::from(DEFAULT_ACCOUNT_INITIAL_BALANCE);
 
@@ -539,7 +520,7 @@ fn should_exec_payment_and_session_stored_code() {
 fn should_produce_same_transforms_by_uref_or_named_uref() {
     // get transforms for direct uref and named uref and compare them
 
-    let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
+    let account_1_public_key = ACCOUNT_1_ADDR;
     let payment_purse_amount = 100_000_000;
     let transferred_amount = 1;
 
@@ -555,7 +536,7 @@ fn should_produce_same_transforms_by_uref_or_named_uref() {
                 &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([1u8; 32])
             .build();
 
@@ -565,52 +546,32 @@ fn should_produce_same_transforms_by_uref_or_named_uref() {
     let mut builder_by_uref = InMemoryWasmTestBuilder::default();
     builder_by_uref.run_genesis(&*DEFAULT_GENESIS_CONFIG);
 
-    let test_result = builder_by_uref.exec_commit_finish(exec_request_genesis);
-    let transforms: &AdditiveMap<Key, Transform, RandomState> =
-        &test_result.builder().get_transforms()[0];
+    builder_by_uref.exec_commit_finish(exec_request_genesis);
 
-    let stored_payment_contract_uref = {
-        // get pos contract public key
-        let pos_uref = builder_by_uref.get_pos_contract_uref();
+    let default_account = builder_by_uref
+        .get_account(DEFAULT_ACCOUNT_ADDR)
+        .expect("should have account");
 
-        // find the contract write transform, then get the uref from its key
-        // the pos contract gets re-written when the refund purse uref is removed from
-        // it and therefore there are two URef->Contract Writes present in
-        // transforms... we want to ignore the proof of stake URef as it is not
-        // the one we are interested in
-        let stored_payment_contract_uref = transforms
-            .iter()
-            .find_map(|key_transform| match key_transform {
-                (Key::URef(uref), Transform::Write(StoredValue::Contract(_)))
-                    if uref != &pos_uref =>
-                {
-                    Some(uref)
-                }
-                _ => None,
-            })
-            .expect("should have stored_payment_contract_uref");
-
-        assert_ne!(
-            &pos_uref, stored_payment_contract_uref,
-            "should ignore the pos_uref"
-        );
-
-        stored_payment_contract_uref
-    };
+    let stored_payment_contract_uref = default_account
+        .named_keys()
+        .get(TRANSFER_PURSE_TO_ACCOUNT_CONTRACT_NAME)
+        .expect("should have named key")
+        .into_uref()
+        .expect("should be an URef");
 
     // direct uref exec
     let exec_request_by_uref = {
         let deploy = DeployItemBuilder::new()
             .with_address(DEFAULT_ACCOUNT_ADDR)
             .with_stored_session_uref(
-                *stored_payment_contract_uref,
+                stored_payment_contract_uref,
                 (account_1_public_key, U512::from(transferred_amount)),
             )
             .with_payment_code(
                 &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2u8; 32])
             .build();
 
@@ -632,7 +593,7 @@ fn should_produce_same_transforms_by_uref_or_named_uref() {
                 &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([1u8; 32])
             .build();
 
@@ -655,7 +616,7 @@ fn should_produce_same_transforms_by_uref_or_named_uref() {
                 &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2u8; 32])
             .build();
 
@@ -674,7 +635,7 @@ fn should_produce_same_transforms_by_uref_or_named_uref() {
 #[ignore]
 #[test]
 fn should_have_equivalent_transforms_with_stored_contract_pointers() {
-    let account_1_public_key = PublicKey::new(ACCOUNT_1_ADDR);
+    let account_1_public_key = ACCOUNT_1_ADDR;
     let payment_purse_amount = 100_000_000;
     let transferred_amount = 1;
 
@@ -692,7 +653,7 @@ fn should_have_equivalent_transforms_with_stored_contract_pointers() {
                     &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                     (U512::from(payment_purse_amount),),
                 )
-                .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+                .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
                 .with_deploy_hash([1; 32])
                 .build();
 
@@ -712,7 +673,7 @@ fn should_have_equivalent_transforms_with_stored_contract_pointers() {
                     &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                     (U512::from(payment_purse_amount),),
                 )
-                .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+                .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
                 .with_deploy_hash([2; 32])
                 .build();
 
@@ -721,26 +682,25 @@ fn should_have_equivalent_transforms_with_stored_contract_pointers() {
                 .build()
         };
 
-        let store_transforms = builder
+        builder
             .run_genesis(&*DEFAULT_GENESIS_CONFIG)
             .exec(exec_request_1)
             .expect_success()
             .commit()
             .exec(exec_request_2)
             .expect_success()
-            .commit()
-            .get_transforms()[1]
-            .to_owned();
+            .commit();
 
-        let stored_payment_contract_hash =
-            store_transforms
-                .iter()
-                .find_map(|key_transform| match key_transform {
-                    (Key::Hash(hash), Transform::Write(StoredValue::Contract(_))) => Some(hash),
-                    _ => None,
-                });
+        let default_account = builder
+            .get_account(DEFAULT_ACCOUNT_ADDR)
+            .expect("should have account");
 
-        assert!(stored_payment_contract_hash.is_some());
+        let stored_payment_contract_hash = default_account
+            .named_keys()
+            .get(STANDARD_PAYMENT_CONTRACT_NAME)
+            .expect("should have named key")
+            .into_hash()
+            .expect("should be a hash");
 
         let call_stored_request = {
             let deploy = DeployItemBuilder::new()
@@ -750,12 +710,10 @@ fn should_have_equivalent_transforms_with_stored_contract_pointers() {
                     (account_1_public_key, U512::from(transferred_amount)),
                 )
                 .with_stored_payment_hash(
-                    stored_payment_contract_hash
-                        .expect("hash should exist")
-                        .to_vec(),
+                    stored_payment_contract_hash.to_vec(),
                     (U512::from(payment_purse_amount),),
                 )
-                .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+                .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
                 .with_deploy_hash([3; 32])
                 .build();
 
@@ -779,7 +737,7 @@ fn should_have_equivalent_transforms_with_stored_contract_pointers() {
                     &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                     (U512::from(payment_purse_amount),),
                 )
-                .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+                .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
                 .with_deploy_hash(deploy_hash)
                 .build();
 
@@ -797,7 +755,7 @@ fn should_have_equivalent_transforms_with_stored_contract_pointers() {
                     &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                     (U512::from(payment_purse_amount),),
                 )
-                .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+                .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
                 .with_deploy_hash([3; 32])
                 .build();
 
@@ -841,8 +799,8 @@ fn should_have_equivalent_transforms_with_stored_contract_pointers() {
                 Transform::Write(StoredValue::Account(la)),
                 Transform::Write(StoredValue::Account(ra)),
             ) => {
-                assert_eq!(la.pub_key(), ra.pub_key());
-                assert_eq!(la.purse_id(), ra.purse_id());
+                assert_eq!(la.public_key(), ra.public_key());
+                assert_eq!(la.main_purse(), ra.main_purse());
                 assert_eq!(la.action_thresholds(), ra.action_thresholds());
 
                 assert!(Iterator::eq(
@@ -923,7 +881,7 @@ fn should_fail_payment_stored_at_named_key_with_incompatible_major_version() {
                 STANDARD_PAYMENT_CONTRACT_NAME,
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2; 32])
             .build();
 
@@ -973,7 +931,7 @@ fn should_fail_payment_stored_at_hash_with_incompatible_major_version() {
         .named_keys()
         .get(STANDARD_PAYMENT_CONTRACT_NAME)
         .expect("should have standard_payment named key")
-        .as_hash()
+        .into_hash()
         .expect("standard_payment should be an uref");
 
     //
@@ -1004,7 +962,7 @@ fn should_fail_payment_stored_at_hash_with_incompatible_major_version() {
                 stored_payment_contract_hash.to_vec(),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2; 32])
             .build();
 
@@ -1086,7 +1044,7 @@ fn should_fail_payment_stored_at_uref_with_incompatible_major_version() {
                 stored_payment_contract_uref,
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2; 32])
             .build();
 
@@ -1167,7 +1125,7 @@ fn should_fail_session_stored_at_named_key_with_incompatible_major_version() {
                 &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2; 32])
             .build();
 
@@ -1217,7 +1175,7 @@ fn should_fail_session_stored_at_hash_with_incompatible_major_version() {
         .named_keys()
         .get(DO_NOTHING_STORED_CONTRACT_NAME)
         .expect("do_nothing should be present in named keys")
-        .as_hash()
+        .into_hash()
         .expect("do_nothing named key should be hash");
 
     //
@@ -1248,7 +1206,7 @@ fn should_fail_session_stored_at_hash_with_incompatible_major_version() {
                 &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2; 32])
             .build();
 
@@ -1330,7 +1288,7 @@ fn should_fail_session_stored_at_uref_with_incompatible_major_version() {
                 &format!("{}.wasm", STANDARD_PAYMENT_CONTRACT_NAME),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([2; 32])
             .build();
 
@@ -1418,7 +1376,7 @@ fn should_execute_stored_payment_and_session_code_with_new_major_version() {
         .named_keys()
         .get(STANDARD_PAYMENT_CONTRACT_NAME)
         .expect("standard_payment should be present in named keys")
-        .as_hash()
+        .into_hash()
         .expect("standard_payment named key should be hash");
     let do_nothing_stored_uref = default_account
         .named_keys()
@@ -1438,7 +1396,7 @@ fn should_execute_stored_payment_and_session_code_with_new_major_version() {
                 standard_payment_stored_hash.to_vec(),
                 (U512::from(payment_purse_amount),),
             )
-            .with_authorization_keys(&[*DEFAULT_ACCOUNT_KEY])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_KEY])
             .with_deploy_hash([3; 32])
             .build();
 

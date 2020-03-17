@@ -210,11 +210,12 @@ object InitialSynchronizationBackwardImplSpec extends ArbitraryConsensus {
   }
 
   object MockBackend extends GossipServiceServer.Backend[Task] {
-    override def hasBlock(blockHash: ByteString)                = ???
-    override def getBlockSummary(blockHash: ByteString)         = ???
-    override def getBlock(blockHash: ByteString)                = ???
-    override def latestMessages: Task[Set[Block.Justification]] = ???
-    override def dagTopoSort(startRank: Long, endRank: Long)    = ???
+    override def hasBlock(blockHash: ByteString)                                 = ???
+    override def getBlockSummary(blockHash: ByteString)                          = ???
+    override def getBlock(blockHash: ByteString, deploysBodiesExcluded: Boolean) = ???
+    override def getDeploys(deployHashes: Set[ByteString])                       = ???
+    override def latestMessages: Task[Set[Block.Justification]]                  = ???
+    override def dagTopoSort(startRank: Long, endRank: Long)                     = ???
   }
 
   object MockSynchronizer extends Synchronizer[Task] {
@@ -222,7 +223,7 @@ object InitialSynchronizationBackwardImplSpec extends ArbitraryConsensus {
     def downloaded(blockHash: ByteString): Task[Unit]             = ???
   }
 
-  object MockDownloadManager extends DownloadManager[Task] {
+  object MockBlockDownloadManager extends BlockDownloadManager[Task] {
     def scheduleDownload(summary: BlockSummary, source: Node, relay: Boolean) = ???
   }
 
@@ -238,7 +239,7 @@ object InitialSynchronizationBackwardImplSpec extends ArbitraryConsensus {
       extends GossipServiceServer[Task](
         MockBackend,
         MockSynchronizer,
-        MockDownloadManager,
+        MockBlockDownloadManager,
         MockGenesisApprover,
         0,
         MockSemaphore
@@ -256,10 +257,9 @@ object InitialSynchronizationBackwardImplSpec extends ArbitraryConsensus {
   }
 
   class MockGossipService(latestMessages: Map[ByteString, Set[Message]])
-      extends GossipService[Task] {
-    def newBlocks(request: NewBlocksRequest)                                       = ???
-    def streamAncestorBlockSummaries(request: StreamAncestorBlockSummariesRequest) = ???
-    def streamLatestMessages(
+      extends NoOpsGossipService[Task] {
+
+    override def streamLatestMessages(
         request: StreamLatestMessagesRequest
     ): Iterant[Task, Block.Justification] =
       Iterant.fromSeq(
@@ -267,11 +267,6 @@ object InitialSynchronizationBackwardImplSpec extends ArbitraryConsensus {
           .flatMap(_.map(m => Block.Justification(m.validatorId, m.messageHash)))
           .toSeq
       )
-    def streamBlockSummaries(request: StreamBlockSummariesRequest)                 = ???
-    def getBlockChunked(request: GetBlockChunkedRequest)                           = ???
-    def getGenesisCandidate(request: GetGenesisCandidateRequest)                   = ???
-    def addApproval(request: AddApprovalRequest): Task[Unit]                       = ???
-    def streamDagSliceBlockSummaries(request: StreamDagSliceBlockSummariesRequest) = ???
   }
 
   object TestFixture {

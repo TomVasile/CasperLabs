@@ -2,7 +2,6 @@ use std::sync;
 
 use failure::Fail;
 use lmdb as lmdb_external;
-use wasmi;
 
 use types::bytesrepr;
 
@@ -17,7 +16,7 @@ pub enum Error {
     BytesRepr(#[fail(cause)] bytesrepr::Error),
 
     #[fail(display = "Another thread panicked while holding a lock")]
-    PoisonError,
+    Poison,
 }
 
 impl wasmi::HostError for Error {}
@@ -36,7 +35,7 @@ impl From<bytesrepr::Error> for Error {
 
 impl<T> From<sync::PoisonError<T>> for Error {
     fn from(_error: sync::PoisonError<T>) -> Self {
-        Error::PoisonError
+        Error::Poison
     }
 }
 
@@ -44,7 +43,7 @@ impl From<in_memory::Error> for Error {
     fn from(error: in_memory::Error) -> Self {
         match error {
             in_memory::Error::BytesRepr(error) => Error::BytesRepr(error),
-            in_memory::Error::PoisonError => Error::PoisonError,
+            in_memory::Error::Poison => Error::Poison,
         }
     }
 }

@@ -3,7 +3,7 @@ package io.casperlabs.storage.util
 import com.google.protobuf.ByteString
 import doobie._
 import io.casperlabs.casper.consensus.Block.ProcessedDeploy
-import io.casperlabs.casper.consensus.{BlockSummary, Deploy}
+import io.casperlabs.casper.consensus.{BlockSummary, Deploy, Era}
 import io.casperlabs.crypto.Keys.{PublicKey, PublicKeyBS}
 import io.casperlabs.casper.consensus.info.BlockInfo
 import io.casperlabs.casper.consensus.info.DeployInfo.ProcessingResult
@@ -30,35 +30,44 @@ trait DoobieCodecs {
     Read[Array[Byte]].map(Deploy.Header.parseFrom)
 
   protected implicit val readProcessingResult: Read[(ByteString, ProcessedDeploy)] = {
-    Read[(Array[Byte], Long, Option[String])].map {
-      case (blockHash, cost, maybeError) =>
+    Read[(Array[Byte], Long, Option[String], Int)].map {
+      case (blockHash, cost, maybeError, stage) =>
         (
           ByteString.copyFrom(blockHash),
           ProcessedDeploy(
             deploy = None,
             cost = cost,
             isError = maybeError.nonEmpty,
-            errorMessage = maybeError.getOrElse("")
+            errorMessage = maybeError.getOrElse(""),
+            stage = stage
           )
         )
     }
   }
 
   protected implicit val readProcessedDeploy: Read[ProcessedDeploy] = {
-    Read[(Deploy, Long, Option[String])].map {
-      case (deploy, cost, maybeError) =>
+    Read[(Deploy, Long, Option[String], Int)].map {
+      case (deploy, cost, maybeError, stage) =>
         ProcessedDeploy(
           deploy = Option(deploy),
           cost = cost,
           isError = maybeError.nonEmpty,
-          errorMessage = maybeError.getOrElse("")
+          errorMessage = maybeError.getOrElse(""),
+          stage = stage
         )
     }
   }
 
   protected implicit val readBlockInfo: Read[BlockInfo] = {
-    Read[(Array[Byte], Int, Int, Long, Long)].map {
-      case (blockSummaryData, blockSize, deployErrorCount, deployCostTotal, deployGasPriceAvg) =>
+    Read[(Array[Byte], Int, Int, Long, Long, Boolean)].map {
+      case (
+          blockSummaryData,
+          blockSize,
+          deployErrorCount,
+          deployCostTotal,
+          deployGasPriceAvg,
+          isFinalized
+          ) =>
         val blockSummary = BlockSummary.parseFrom(blockSummaryData)
         val blockStatus = BlockInfo
           .Status()
@@ -70,6 +79,7 @@ trait DoobieCodecs {
               .withDeployCostTotal(deployCostTotal)
               .withDeployGasPriceAvg(deployGasPriceAvg)
           )
+          .withIsFinalized(isFinalized)
         BlockInfo()
           .withSummary(blockSummary)
           .withStatus(blockStatus)
@@ -77,12 +87,13 @@ trait DoobieCodecs {
   }
 
   protected implicit val readDeployAndProcessingResult: Read[ProcessingResult] = {
-    Read[(Long, Option[String], BlockInfo)].map {
-      case (cost, maybeError, blockInfo) =>
+    Read[(Long, Option[String], Int, BlockInfo)].map {
+      case (cost, maybeError, stage, blockInfo) =>
         ProcessingResult(
           cost = cost,
           isError = maybeError.nonEmpty,
-          errorMessage = maybeError.getOrElse("")
+          errorMessage = maybeError.getOrElse(""),
+          stage = stage
         ).withBlockInfo(blockInfo)
     }
   }
@@ -92,4 +103,7 @@ trait DoobieCodecs {
 
   protected implicit val metaTransformEntry: Meta[TransformEntry] =
     Meta[Array[Byte]].imap(TransformEntry.parseFrom)(_.toByteString.toByteArray)
+
+  protected implicit val metaEra: Meta[Era] =
+    Meta[Array[Byte]].imap(Era.parseFrom)(_.toByteString.toByteArray)
 }

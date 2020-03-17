@@ -9,11 +9,10 @@
 
 use std::{env, io, path::PathBuf};
 
-use base16;
 use clap::{crate_version, App, Arg};
 
 use engine_core::engine_state::EngineConfig;
-use engine_test_support::low_level::{
+use engine_test_support::internal::{
     DeployItemBuilder, ExecuteRequestBuilder, LmdbWasmTestBuilder, DEFAULT_PAYMENT,
 };
 use types::U512;
@@ -100,7 +99,7 @@ fn main() {
 
     let exec_request = {
         let deploy = DeployItemBuilder::new()
-            .with_address(account_1_public_key.value())
+            .with_address(account_1_public_key)
             .with_deploy_hash([1; 32])
             .with_session_code(
                 "simple_transfer.wasm",
@@ -113,8 +112,11 @@ fn main() {
         ExecuteRequestBuilder::new().push_deploy(deploy).build()
     };
 
-    let mut test_builder =
-        LmdbWasmTestBuilder::open(&args.data_dir, EngineConfig::new(), root_hash);
+    let engine_config = EngineConfig::new()
+        .with_use_system_contracts(cfg!(feature = "use-system-contracts"))
+        .with_highway(cfg!(feature = "highway"));
+
+    let mut test_builder = LmdbWasmTestBuilder::open(&args.data_dir, engine_config, root_hash);
 
     test_builder.exec(exec_request).expect_success().commit();
 

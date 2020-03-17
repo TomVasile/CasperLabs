@@ -52,20 +52,23 @@ INTEGRATION_CONTRACTS += \
 	pos-bonding \
 	remove-associated-key \
 	standard-payment \
-	transfer-to-account \
+	transfer-to-account-u512 \
 	unbonding-call
 
-INTEGRATION_CONTRACTS := $(patsubst %, build-integration-contract/%, $(INTEGRATION_CONTRACTS))
+INTEGRATION_CONTRACTS := $(patsubst %, build-integration-contract-rs/%, $(INTEGRATION_CONTRACTS))
 
 CONTRACT_TARGET_DIR       = target/wasm32-unknown-unknown/release
 CONTRACT_TARGET_DIR_AS    = target-as
-PACKAGED_SYSTEM_CONTRACTS = mint_install.wasm pos_install.wasm
+PACKAGED_SYSTEM_CONTRACTS = mint_install.wasm pos_install.wasm standard_payment_install.wasm
+TOOL_TARGET_DIR           = cargo-casperlabs/target
+TOOL_WASM_DIR             = cargo-casperlabs/wasm
 
 .PHONY: all
 all: build build-contracts
 
+# TODO - remove dependency on standard-payment-install once Node is updated to pass this via GenesisConfig
 .PHONY: build
-build:
+build: build-contract-rs/standard-payment-install
 	$(CARGO) build $(CARGO_FLAGS)
 
 build-contract-rs/%:
@@ -74,10 +77,7 @@ build-contract-rs/%:
 	        --package $* \
 	        --target wasm32-unknown-unknown
 
-build-contract-as/%:
-	cd $* && $(NPM) run asbuild
-
-build-integration-contract/%:
+build-integration-contract-rs/%:
 	$(CARGO) build \
 	        -Z unstable-options \
 	        --release $(filter-out --release, $(CARGO_FLAGS)) \
@@ -97,6 +97,15 @@ build-contracts-rs: \
 	$(SYSTEM_CONTRACTS) \
 	$(TEST_CONTRACTS)
 
+.PHONY: build-example-contracts
+build-example-contracts: $(EXAMPLE_CONTRACTS)
+
+.PHONY: build-integration-contracts
+build-integration-contracts: $(INTEGRATION_CONTRACTS)
+
+build-contract-as/%:
+	cd $* && $(NPM) run asbuild
+
 .PHONY: build-contracts-as
 build-contracts-as: \
 	$(CLIENT_CONTRACTS_AS) \
@@ -106,14 +115,9 @@ build-contracts-as: \
 .PHONY: build-contracts
 build-contracts: build-contracts-rs build-contracts-as
 
-.PHONY: build-integration-contracts
-build-integration-contracts: $(INTEGRATION_CONTRACTS)
-
-.PHONY: build-example-contracts
-build-example-contracts: $(EXAMPLE_CONTRACTS)
-
+# TODO - remove dependency on standard-payment-install once Node is updated to pass this via GenesisConfig
 .PHONY: test-rs
-test-rs:
+test-rs: build-contract-rs/standard-payment-install
 	$(CARGO) test $(CARGO_FLAGS) --all -- --nocapture
 
 .PHONY: test-as
@@ -126,6 +130,7 @@ test: test-rs test-as
 .PHONY: test-contracts-rs
 test-contracts-rs: build-contracts-rs
 	$(CARGO) test $(CARGO_FLAGS) -p casperlabs-engine-tests -- --ignored --nocapture
+	$(CARGO) test $(CARGO_FLAGS) --manifest-path "engine-tests/Cargo.toml" --features "use-system-contracts" -- --ignored --nocapture
 
 .PHONY: test-contracts-as
 test-contracts-as: build-contracts-rs build-contracts-as
@@ -143,15 +148,31 @@ check-format:
 format:
 	$(CARGO) fmt --all
 
+# TODO - remove dependency on standard-payment-install once Node is updated to pass this via GenesisConfig
 .PHONY: lint
-lint:
+lint: build-contract-rs/standard-payment-install
 	$(CARGO) clippy --all-targets --all -- -D warnings -A renamed_and_removed_lints
+
+.PHONY: audit
+audit:
+	$(CARGO) generate-lockfile
+	$(CARGO) audit
+
+.PHONY: check-rs
+check-rs: \
+	build \
+	check-format \
+	lint \
+	audit \
+	test-rs \
+	test-contracts-rs \
 
 .PHONY: check
 check: \
 	build \
 	check-format \
 	lint \
+	audit \
 	test \
 	test-contracts
 
@@ -159,17 +180,21 @@ check: \
 clean:
 	rm -f comm/.rpm
 	rm -rf $(CONTRACT_TARGET_DIR_AS)
+	rm -rf $(TOOL_TARGET_DIR)
+	rm -rf $(TOOL_WASM_DIR)
 	$(CARGO) clean
 
+# TODO - remove dependency on standard-payment-install once Node is updated to pass this via GenesisConfig
 .PHONY: deb
-deb:
+deb: build-contract-rs/standard-payment-install
 	cd engine-grpc-server && $(CARGO) deb
 
 engine-grpc-server/.rpm:
 	cd engine-grpc-server && $(CARGO) rpm init
 
+# TODO - remove dependency on standard-payment-install once Node is updated to pass this via GenesisConfig
 .PHONY: rpm
-rpm: engine-grpc-server/.rpm
+rpm: engine-grpc-server/.rpm build-contract-rs/standard-payment-install
 	cd engine-grpc-server && $(CARGO) rpm build
 
 target/system-contracts.tar.gz: $(SYSTEM_CONTRACTS)
@@ -186,18 +211,6 @@ package:
 publish:
 	./publish.sh
 
-.PHONY: check-publish
-check-publish:
-	cd cargo-casperlabs && $(CARGO) publish --dry-run
-#	cd contract && $(CARGO) publish --dry-run
-#	cd engine-core && $(CARGO) publish --dry-run
-#	cd engine-grpc-server && $(CARGO) publish --dry-run
-#	cd engine-shared && $(CARGO) publish --dry-run
-#	cd engine-storage && $(CARGO) publish --dry-run
-#	cd engine-test-support && $(CARGO) publish --dry-run
-#	cd engine-wasm-prep && $(CARGO) publish --dry-run
-	cd types && $(CARGO) publish --dry-run
-
 .PHONY: bench
 bench: build-contracts-rs
 	$(CARGO) bench
@@ -207,12 +220,15 @@ setup-cargo-packagers:
 	$(CARGO) install cargo-rpm || exit 0
 	$(CARGO) install cargo-deb || exit 0
 
+.PHONY: setup-audit
+setup-audit:
+	$(CARGO) install cargo-audit
+
 .PHONY: setup-rs
 setup-rs: rust-toolchain
 	$(RUSTUP) update
 	$(RUSTUP) toolchain install $(RUST_TOOLCHAIN)
 	$(RUSTUP) target add --toolchain $(RUST_TOOLCHAIN) wasm32-unknown-unknown
-	$(RUSTUP) component add --toolchain $(RUST_TOOLCHAIN) rustfmt clippy
 
 .PHONY: setup-as
 setup-as: contract-as/package.json

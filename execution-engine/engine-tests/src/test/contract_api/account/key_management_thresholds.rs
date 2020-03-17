@@ -1,6 +1,9 @@
-use engine_test_support::low_level::{
-    DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR,
-    DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT, STANDARD_PAYMENT_CONTRACT,
+use engine_test_support::{
+    internal::{
+        DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_GENESIS_CONFIG,
+        DEFAULT_PAYMENT, STANDARD_PAYMENT_CONTRACT,
+    },
+    DEFAULT_ACCOUNT_ADDR,
 };
 use types::account::PublicKey;
 
@@ -51,9 +54,9 @@ fn should_verify_key_management_permission_with_sufficient_weight() {
             )
             .with_deploy_hash([2u8; 32])
             .with_authorization_keys(&[
-                PublicKey::new(DEFAULT_ACCOUNT_ADDR),
+                DEFAULT_ACCOUNT_ADDR,
                 // Key [42; 32] is created in init stage
-                PublicKey::new([42; 32]),
+                PublicKey::ed25519_from([42; 32]),
             ])
             .build();
         ExecuteRequestBuilder::from_deploy_item(deploy).build()

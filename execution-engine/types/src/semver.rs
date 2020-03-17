@@ -1,24 +1,30 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::bytesrepr::{Error, FromBytes, ToBytes};
+use crate::bytesrepr::{self, Error, FromBytes, ToBytes, U32_SERIALIZED_LENGTH};
 
-pub const SEM_VER_SERIALIZED_LENGTH: usize = 12;
+const SEM_VER_SERIALIZED_LENGTH: usize = 3 * U32_SERIALIZED_LENGTH;
 
+/// A struct for semantic versioning.
 #[derive(Copy, Clone, Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SemVer {
+    /// Major version.
     pub major: u32,
+    /// Minor version.
     pub minor: u32,
+    /// Patch version.
     pub patch: u32,
 }
 
 impl SemVer {
+    /// Version 1.0.0.
     pub const V1_0_0: SemVer = SemVer {
         major: 1,
         minor: 0,
         patch: 0,
     };
 
+    /// Constructs a new `SemVer` from the given semver parts.
     pub fn new(major: u32, minor: u32, patch: u32) -> SemVer {
         SemVer {
             major,
@@ -30,11 +36,15 @@ impl SemVer {
 
 impl ToBytes for SemVer {
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let mut ret: Vec<u8> = Vec::with_capacity(SEM_VER_SERIALIZED_LENGTH);
+        let mut ret = bytesrepr::unchecked_allocate_buffer(self);
         ret.append(&mut self.major.to_bytes()?);
         ret.append(&mut self.minor.to_bytes()?);
         ret.append(&mut self.patch.to_bytes()?);
         Ok(ret)
+    }
+
+    fn serialized_length(&self) -> usize {
+        SEM_VER_SERIALIZED_LENGTH
     }
 }
 

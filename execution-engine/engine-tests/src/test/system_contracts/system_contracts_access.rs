@@ -1,26 +1,28 @@
 use lazy_static::lazy_static;
 
 use engine_core::execution;
-use engine_shared::transform::TypeMismatch;
-use engine_test_support::low_level::{
-    ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR, DEFAULT_GENESIS_CONFIG,
-    DEFAULT_PAYMENT,
+use engine_shared::TypeMismatch;
+use engine_test_support::{
+    internal::{
+        ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT,
+    },
+    DEFAULT_ACCOUNT_ADDR,
 };
-use types::{URef, U512};
+use types::{account::PublicKey, URef, U512};
 
 const CONTRACT_SYSTEM_CONTRACTS_ACCESS: &str = "system_contracts_access.wasm";
 const CONTRACT_OVERWRITE_UREF_CONTENT: &str = "overwrite_uref_content.wasm";
-const CONTRACT_TRANSFER_TO_ACCOUNT_01: &str = "transfer_to_account_01.wasm";
+const CONTRACT_TRANSFER_TO_ACCOUNT: &str = "transfer_to_account_u512.wasm";
 
-const SYSTEM_ADDR: [u8; 32] = [0u8; 32];
-const ACCOUNT_1_ADDR: [u8; 32] = [1u8; 32];
+const SYSTEM_ADDR: PublicKey = PublicKey::ed25519_from([0u8; 32]);
+const ACCOUNT_1_ADDR: PublicKey = PublicKey::ed25519_from([1u8; 32]);
 
 lazy_static! {
     static ref ACCOUNT_1_INITIAL_BALANCE: U512 = *DEFAULT_PAYMENT * 10;
     static ref SYSTEM_INITIAL_BALANCE: U512 = *DEFAULT_PAYMENT * 10;
 }
 
-fn run_test_with_address(builder: &mut InMemoryWasmTestBuilder, address: [u8; 32]) {
+fn run_test_with_address(builder: &mut InMemoryWasmTestBuilder, address: PublicKey) {
     let exec_request =
         ExecuteRequestBuilder::standard(address, CONTRACT_SYSTEM_CONTRACTS_ACCESS, ()).build();
 
@@ -34,7 +36,7 @@ fn should_verify_system_contracts_access_rights_default() {
 
     let exec_request_1 = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
-        CONTRACT_TRANSFER_TO_ACCOUNT_01,
+        CONTRACT_TRANSFER_TO_ACCOUNT,
         (ACCOUNT_1_ADDR, *ACCOUNT_1_INITIAL_BALANCE),
     )
     .build();
@@ -49,7 +51,7 @@ fn should_verify_system_contracts_access_rights_default() {
     run_test_with_address(&mut builder, ACCOUNT_1_ADDR);
 }
 
-fn overwrite_as_account(builder: &mut InMemoryWasmTestBuilder, uref: URef, address: [u8; 32]) {
+fn overwrite_as_account(builder: &mut InMemoryWasmTestBuilder, uref: URef, address: PublicKey) {
     let exec_request =
         ExecuteRequestBuilder::standard(address, CONTRACT_OVERWRITE_UREF_CONTENT, (uref,)).build();
 
@@ -74,7 +76,7 @@ fn should_not_overwrite_system_contract_uref_as_user() {
 
     let exec_request_1 = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
-        CONTRACT_TRANSFER_TO_ACCOUNT_01,
+        CONTRACT_TRANSFER_TO_ACCOUNT,
         (ACCOUNT_1_ADDR, *ACCOUNT_1_INITIAL_BALANCE),
     )
     .build();
@@ -105,7 +107,7 @@ fn should_not_overwrite_system_contract_uref_as_user() {
 fn should_overwrite_system_contract_uref_as_system() {
     let exec_request_1 = ExecuteRequestBuilder::standard(
         DEFAULT_ACCOUNT_ADDR,
-        CONTRACT_TRANSFER_TO_ACCOUNT_01,
+        CONTRACT_TRANSFER_TO_ACCOUNT,
         (SYSTEM_ADDR, *SYSTEM_INITIAL_BALANCE),
     )
     .build();
@@ -133,8 +135,8 @@ fn should_overwrite_system_contract_uref_as_system() {
         .exec_error_message(0)
         .expect("should execute mint overwrite with error");
     assert!(
-        error_msg.contains("FinalizationError"),
-        "Expected FinalizationError, got {}",
+        error_msg.contains("Finalization"),
+        "Expected Error::Finalization, got {}",
         error_msg
     );
 

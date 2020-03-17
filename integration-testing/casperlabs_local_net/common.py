@@ -39,7 +39,7 @@ class Contract:
     STANDARD_PAYMENT = "standard_payment.wasm"
     SUBCALL_REVERT_CALL = "subcall_revert_call.wasm"
     SUBCALL_REVERT_DEFINE = "subcall_revert_define.wasm"
-    TRANSFER_TO_ACCOUNT = "transfer_to_account.wasm"
+    TRANSFER_TO_ACCOUNT = "transfer_to_account_u512.wasm"
     UPDATE_ASSOCIATED_KEY = "update_associated_key.wasm"
 
 
@@ -117,18 +117,4 @@ def extract_deploy_hash_from_deploy_output(deploy_output: str) -> str:
     match = re.match(r"Success! Deploy ([0-9a-f]+) deployed.", deploy_output.strip())
     if match is None:
         raise UnexpectedProposeOutputFormatError(deploy_output)
-    return match.group(1)
-
-
-def extract_block_hash_from_propose_output(propose_output: str):
-    """We're getting back something along the lines of:
-
-    Response: Success! Block a91208047c... created and added.\n
-    """
-    match = re.match(
-        r"Response: Success! Block ([0-9a-f]+) created and added.",
-        propose_output.strip(),
-    )
-    if match is None:
-        raise UnexpectedProposeOutputFormatError(propose_output)
     return match.group(1)

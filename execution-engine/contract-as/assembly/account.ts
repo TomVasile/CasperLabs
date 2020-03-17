@@ -1,5 +1,8 @@
 import * as externals from "./externals";
 import {arrayToTyped} from "./utils";
+import {UREF_SERIALIZED_LENGTH} from "./constants";
+import {URef} from "./uref";
+import {PublicKey, PUBLIC_KEY_ED25519_ID} from "./key";
 
 export enum AddKeyFailure {
     // Success
@@ -35,9 +38,9 @@ export enum RemoveKeyFailure {
 export enum SetThresholdFailure {
     Ok = 0,
     // New threshold should be lower or equal than deployment threshold
-    KeyManagementThresholdError = 1,
+    KeyManagementThreshold = 1,
     // New threshold should be lower or equal than key management threshold
-    DeploymentThresholdError = 2,
+    DeploymentThreshold = 2,
     // Unable to set action threshold due to insufficient permissions
     PermissionDeniedError = 3,
     // New threshold should be lower or equal than total weight of associated keys
@@ -51,26 +54,36 @@ export enum ActionType {
     KeyManagement = 1,
 }
 
-export function addAssociatedKey(publicKey: Array<u8>, weight: i32): AddKeyFailure {
-    const publicKeyBytes = arrayToTyped(publicKey);
-    const ret = externals.add_associated_key(publicKeyBytes.dataStart, weight);
+export function addAssociatedKey(publicKey: PublicKey, weight: i32): AddKeyFailure {
+    const publicKeyBytes = publicKey.toBytes();
+    const ret = externals.add_associated_key(publicKeyBytes.dataStart, publicKeyBytes.length, weight);
     return <AddKeyFailure>ret;
 }
-
 
 export function setActionThreshold(actionType: ActionType, thresholdValue: u8): SetThresholdFailure {
     const ret = externals.set_action_threshold(<i32>actionType, thresholdValue);
     return <SetThresholdFailure>ret;
 }
 
-export function updateAssociatedKey(publicKey: Array<u8>, weight: i32): UpdateKeyFailure {
-    const publicKeyBytes = arrayToTyped(publicKey);
-    const ret = externals.update_associated_key(publicKeyBytes.dataStart, weight);
+export function updateAssociatedKey(publicKey: PublicKey, weight: i32): UpdateKeyFailure {
+    const publicKeyBytes = publicKey.toBytes();
+    const ret = externals.update_associated_key(publicKeyBytes.dataStart, publicKeyBytes.length, weight);
     return <UpdateKeyFailure>ret;
 }
 
-export function removeAssociatedKey(publicKey: Array<u8>): RemoveKeyFailure {
-    const publicKeyBytes = arrayToTyped(publicKey);
-    const ret = externals.remove_associated_key(publicKeyBytes.dataStart);
+export function removeAssociatedKey(publicKey: PublicKey): RemoveKeyFailure {
+    const publicKeyBytes = publicKey.toBytes();
+    const ret = externals.remove_associated_key(publicKeyBytes.dataStart, publicKeyBytes.length);
     return <RemoveKeyFailure>ret;
+}
+
+export function getMainPurse(): URef | null {
+    let data = new Uint8Array(UREF_SERIALIZED_LENGTH);
+    data.fill(0);
+    externals.get_main_purse(data.dataStart);
+    let urefResult = URef.fromBytes(data);
+    if (urefResult.hasError()) {
+        return null;
+    }
+    return urefResult.value;
 }

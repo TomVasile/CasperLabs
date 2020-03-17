@@ -6,20 +6,21 @@ import cats.Id
 import cats.effect._
 import cats.implicits._
 import com.google.protobuf.ByteString
-import io.casperlabs.casper.consensus.{Approval, Block, BlockSummary, GenesisCandidate}
+import io.casperlabs.casper.consensus._
 import io.casperlabs.catscontrib.effect.implicits.syncId
 import io.casperlabs.comm.ServiceError.{NotFound, ResourceExhausted, Unauthenticated, Unavailable}
 import io.casperlabs.comm.discovery.Node
-import io.casperlabs.comm.gossiping.synchronization.Synchronizer.SyncError
 import io.casperlabs.comm.gossiping.Utils.hex
 import io.casperlabs.comm.gossiping.synchronization.Synchronizer
+import io.casperlabs.comm.gossiping.synchronization.Synchronizer.SyncError
 import io.casperlabs.comm.grpc.{AuthInterceptor, ErrorInterceptor, GrpcServer, SslContexts}
 import io.casperlabs.comm.{ServiceError, TestRuntime}
 import io.casperlabs.crypto.codec.Base16
 import io.casperlabs.crypto.util.{CertificateHelper, CertificatePrinter}
 import io.casperlabs.metrics.Metrics
 import io.casperlabs.models.BlockImplicits._
-import io.casperlabs.models.Message
+import io.casperlabs.models.PartialPrettifier
+import io.casperlabs.shared.Sorting._
 import io.casperlabs.shared.{Compression, Log}
 import io.grpc.netty.{NegotiationType, NettyChannelBuilder}
 import io.netty.handler.ssl.ClientAuth
@@ -35,6 +36,7 @@ import org.scalatest.concurrent._
 import org.scalatest.prop.GeneratorDrivenPropertyChecks.{forAll, PropertyCheckConfiguration}
 
 import scala.concurrent.duration._
+import org.scalactic.Prettifier
 
 class GrpcGossipServiceSpec
     extends refspec.RefSpecLike
@@ -67,7 +69,7 @@ class GrpcGossipServiceSpec
   override def afterAll() =
     shutdown.runSyncUnsafe(10.seconds)
 
-  def runTestUnsafe(testData: TestData, timeout: FiniteDuration = 5.seconds)(
+  def runTestUnsafe(testData: TestData, timeout: FiniteDuration = 10.seconds)(
       test: Task[Unit]
   ): Unit = {
     testDataRef.set(testData)
@@ -76,6 +78,7 @@ class GrpcGossipServiceSpec
 
   override def nestedSuites = Vector(
     GetBlockChunkedSpec,
+    StreamDeploysChunkedSpec,
     StreamBlockSummariesSpec,
     StreamAncestorBlockSummariesSpec,
     StreamLatestMessagesSpec,
@@ -238,36 +241,41 @@ class GrpcGossipServiceSpec
             }
           }
           "queue isn't full" should {
-            "throttle" in forAll(arbitrary[Block], validSenderGen) { (block, sender) =>
-              val requestsNum   = 5
-              val queueSize     = 10
-              val minSuccessful = 2
+            "throttle" in forAll(arbitrary[Block], validSenderGen) {
+              if (sys.env.contains("DRONE_BRANCH")) {
+                cancel("NODE-1200")
+              }
 
-              implicit val patienceConfig = PatienceConfig(10.seconds, 500.millis)
+              (block, sender) =>
+                val requestsNum   = 5
+                val queueSize     = 10
+                val minSuccessful = 2
 
-              test(block, queueSize) { stub =>
-                val success = Atomic(0)
-                val errors  = Atomic(0)
-                val runParallelRequests = Task.gatherUnordered(
-                  List.fill(requestsNum)(
-                    query(sender.some, List(block.blockHash))(stub)
-                      .redeemWith[Unit](
-                        _ => Task(errors.increment()),
-                        _ => Task(success.increment())
-                      )
+                implicit val patienceConfig = PatienceConfig(10.seconds, 500.millis)
+
+                test(block, queueSize) { stub =>
+                  val success = Atomic(0)
+                  val errors  = Atomic(0)
+                  val runParallelRequests = Task.gatherUnordered(
+                    List.fill(requestsNum)(
+                      query(sender.some, List(block.blockHash))(stub)
+                        .redeemWith[Unit](
+                          _ => Task(errors.increment()),
+                          _ => Task(success.increment())
+                        )
+                    )
                   )
-                )
 
-                for {
-                  _ <- runParallelRequests.startAndForget
-                } yield {
-                  eventually {
-                    assert(errors.get() == 0)
-                    // Not comparing with precise number, because it may vary in CI and fail
-                    assert(success.get() >= minSuccessful && success.get() < requestsNum)
+                  for {
+                    _ <- runParallelRequests.startAndForget
+                  } yield {
+                    eventually {
+                      assert(errors.get() == 0)
+                      // Not comparing with precise number, because it may vary in CI and fail
+                      assert(success.get() >= minSuccessful && success.get() < requestsNum)
+                    }
                   }
                 }
-              }
             }
           }
         }
@@ -302,60 +310,44 @@ class GrpcGossipServiceSpec
 
     "getBlocksChunked" when {
       "called with a valid sender" when {
-        "no compression is supported" should {
-          "return a stream of uncompressed chunks" in {
-            forAll { block: Block =>
-              runTestUnsafe(TestData.fromBlock(block), timeout = 15.seconds) {
-                val req = GetBlockChunkedRequest(blockHash = block.blockHash)
-                stub.getBlockChunked(req).toListL.map { chunks =>
-                  chunks.head.content.isHeader shouldBe true
-                  val header = chunks.head.getHeader
-                  header.compressionAlgorithm shouldBe ""
-                  chunks.size should be > 1
+        "no compression is supported" when {
+          def test(excludeDeployBodies: Boolean): Unit = forAll { block: Block =>
+            runTestUnsafe(TestData.fromBlock(block), timeout = 15.seconds) {
+              val req = GetBlockChunkedRequest(
+                blockHash = block.blockHash,
+                excludeDeployBodies = excludeDeployBodies
+              )
+              stub.getBlockChunked(req).toListL.map { chunks =>
+                chunks.head.content.isHeader shouldBe true
+                val header = chunks.head.getHeader
+                header.compressionAlgorithm shouldBe ""
+                chunks.size should be > 1
 
-                  Inspectors.forAll(chunks.tail) { chunk =>
-                    chunk.content.isData shouldBe true
-                    chunk.getData.size should be <= DefaultMaxChunkSize
-                  }
-
-                  val content  = chunks.tail.flatMap(_.getData.toByteArray).toArray
-                  val original = block.toByteArray
-                  header.contentLength shouldBe content.length
-                  header.originalContentLength shouldBe original.length
-                  md5(content) shouldBe md5(original)
+                Inspectors.forAll(chunks.tail) { chunk =>
+                  chunk.content.isData shouldBe true
+                  chunk.getData.size should be <= DefaultMaxChunkSize
                 }
+
+                val content = chunks.tail.flatMap(_.getData.toByteArray).toArray
+                val original =
+                  (if (excludeDeployBodies) block.clearDeployBodies else block).toByteArray
+                header.contentLength shouldBe content.length
+                header.originalContentLength shouldBe original.length
+                md5(content) shouldBe md5(original)
               }
             }
           }
-        }
 
-        "compression is supported" should {
-          "return a stream of compressed chunks" in {
-            forAll { block: Block =>
-              runTestUnsafe(TestData.fromBlock(block)) {
-                val req = GetBlockChunkedRequest(
-                  blockHash = block.blockHash,
-                  acceptedCompressionAlgorithms = Seq("lz4")
-                )
+          "specified to exclude deploys bodies" should {
+            "return a stream of uncompressed chunks with deploys bodies excluded" in test(
+              excludeDeployBodies = true
+            )
+          }
 
-                stub.getBlockChunked(req).toListL.map { chunks =>
-                  chunks.head.content.isHeader shouldBe true
-                  val header = chunks.head.getHeader
-                  header.compressionAlgorithm shouldBe "lz4"
-
-                  val content  = chunks.tail.flatMap(_.getData.toByteArray).toArray
-                  val original = block.toByteArray
-                  header.contentLength shouldBe content.length
-                  header.originalContentLength shouldBe original.length
-
-                  val decompressed = Compression
-                    .decompress(content, header.originalContentLength)
-                    .get
-
-                  md5(decompressed) shouldBe md5(original)
-                }
-              }
-            }
+          "specified to return full blocks" should {
+            "return a stream of uncompressed chunks with deploys bodies included" in test(
+              excludeDeployBodies = false
+            )
           }
         }
 
@@ -579,7 +571,7 @@ class GrpcGossipServiceSpec
 
               val faultyBackend = (_: AtomicReference[TestData]) => {
                 new GossipServiceServer.Backend[Task] {
-                  def getBlock(blockHash: ByteString) = {
+                  def getBlock(blockHash: ByteString, excludeDeployBodies: Boolean) = {
                     cnt = cnt + 1
                     cnt match {
                       case 1 =>
@@ -592,6 +584,7 @@ class GrpcGossipServiceSpec
                   }
                   def hasBlock(blockHash: ByteString)                = ???
                   def getBlockSummary(blockHash: ByteString)         = ???
+                  def getDeploys(deployHashes: Set[ByteString])      = ???
                   def latestMessages: Task[Set[Block.Justification]] = ???
                   def dagTopoSort(startRank: Long, endRank: Long)    = ???
                 }
@@ -634,6 +627,66 @@ class GrpcGossipServiceSpec
         }
       }
     }
+  }
+
+  object StreamDeploysChunkedSpec extends WordSpecLike {
+    implicit val propCheckConfig = PropertyCheckConfiguration(minSuccessful = 3)
+    implicit val patienceConfig  = PatienceConfig(5.seconds, 500.millis)
+    implicit val consensusConfig = ConsensusConfig(
+      maxSessionCodeBytes = 750 * 1024,
+      minSessionCodeBytes = 10 * 1024,
+      maxPaymentCodeBytes = 450 * 1024,
+      minPaymentCodeBytes = 10 * 1024
+    )
+
+    "streamDeploysChunked" when {
+      "called with a list of deploy hashes and compression" should {
+        "return a stream of compressed chunks" in {
+          val data = for {
+            block        <- arbitrary[Block]
+            deploys      = block.getBody.deploys.map(_.getDeploy).map(d => d.deployHash -> d).toMap
+            deployHashes <- Gen.someOf(deploys.keys)
+            randomHashes <- Gen.listOf(genHash)
+          } yield (block, deploys, deployHashes, randomHashes)
+
+          forAll(data) {
+            case (block, deploys, existingHashes, nonExistingHashes) =>
+              runTestUnsafe(TestData.fromBlock(block), timeout = 5.seconds) {
+                val req = StreamDeploysChunkedRequest(
+                  deployHashes = nonExistingHashes ++ existingHashes,
+                  acceptedCompressionAlgorithms = Seq("lz4")
+                )
+                stub.streamDeploysChunked(req).toListL.map { chunks =>
+                  val items = chunks.foldLeft(List.empty[(Chunk.Header, Array[Byte])]) {
+                    case (acc, chunk) if chunk.content.isHeader =>
+                      val header = chunk.getHeader
+                      header.compressionAlgorithm shouldBe "lz4"
+                      (header, Array.empty[Byte]) :: acc
+
+                    case ((h, arr) :: acc, chunk) if chunk.content.isData =>
+                      val data = chunk.getData.toByteArray
+                      (h, arr ++ data) :: acc
+
+                    case _ =>
+                      fail("Unexpected data in stream.")
+                  }
+                  items should have size (existingHashes.size.toLong)
+
+                  Inspectors.forAll(items) {
+                    case (header, data) =>
+                      val decompressed =
+                        Compression.decompress(data, header.originalContentLength).get
+                      val deploy   = Deploy.parseFrom(decompressed)
+                      val original = deploys(deploy.deployHash)
+                      (deploy == original) shouldBe true
+                  }
+                }
+              }
+          }
+        }
+      }
+    }
+
   }
 
   object StreamBlockSummariesSpec extends WordSpecLike {
@@ -683,20 +736,22 @@ class GrpcGossipServiceSpec
         target: ByteString,
         maxDepth: Int
     ): Map[ByteString, Int] = {
-      def loop(visited: Map[ByteString, Int], hash: ByteString, depth: Int): Map[ByteString, Int] =
-        if (depth > maxDepth)
-          visited
-        else {
-          val summary     = summaries(hash)
-          val nextVisited = visited + (summary.blockHash -> depth)
-          elders(summary).foldLeft(nextVisited) {
-            case (visited, hash) if visited.contains(hash) && visited(hash) <= depth + 1 =>
+      val targetSummary = summaries(target)
+      def loop(visited: Map[ByteString, Int], summary: BlockSummary): Map[ByteString, Int] =
+        elders(summary)
+          .map(summaries.get)
+          .flatten
+          .map(dep => dep -> (targetSummary.getHeader.jRank - dep.getHeader.jRank).toInt)
+          .foldLeft(visited) {
+            case (visited, (_, dist)) if dist > maxDepth =>
               visited
-            case (visited, hash) =>
-              loop(visited, hash, depth + 1)
+            case (visited, (dep, dist))
+                if visited.contains(dep.blockHash) && visited(dep.blockHash) <= dist =>
+              visited
+            case (visited, (dep, dist)) =>
+              loop(visited.updated(dep.blockHash, dist), dep)
           }
-        }
-      loop(Map.empty, target, 0)
+      loop(Map(target -> 0), targetSummary)
     }
 
     /** Collect the ancestors of all targets and return the minimum distance to the nearest target. */
@@ -745,6 +800,11 @@ class GrpcGossipServiceSpec
         new TestFixture[T](gen, test)
     }
 
+    implicit val prettifier: Prettifier = PartialPrettifier {
+      case bs: ByteString   => hex(bs)
+      case bs: BlockSummary => s"BlockSummary(${hex(bs)})"
+    }
+
     "streamAncestorBlockSummaries" when {
       "called with unknown target hashes" should {
         "return an empty stream" in {
@@ -785,17 +845,20 @@ class GrpcGossipServiceSpec
           )
         } yield TestCase(dag, req)
 
-        "return the targets and their parents + justifications" in TestFixture(genTestCase) {
+        "return the targets and their parents + justifications within 1 rank" in TestFixture(
+          genTestCase
+        ) {
           case tc @ TestCase(_, req) =>
+            val targets = req.targetBlockHashes.map(tc.summaries)
             val expected = (
-              req.targetBlockHashes ++
-                req.targetBlockHashes.flatMap { t =>
-                  elders(tc.summaries(t))
+              targets ++
+                targets.flatMap { t =>
+                  elders(t).map(tc.summaries).filterNot(_.jRank < t.jRank - 1)
                 }
             ).toSet
 
             stub.streamAncestorBlockSummaries(req).toListL.map { ancestors =>
-              ancestors.map(_.blockHash) should contain theSameElementsAs expected
+              ancestors should contain theSameElementsAs expected
             }
         }
       }
@@ -829,7 +892,7 @@ class GrpcGossipServiceSpec
           )
         } yield TestCase(dag, req)
 
-        "return all ancestors of the target up to that depth in reverse breadth first order" in TestFixture(
+        "return all ancestors of the target up to that depth in reverse topological order" in TestFixture(
           genTestCase
         ) {
           case tc @ TestCase(_, req) =>
@@ -858,7 +921,8 @@ class GrpcGossipServiceSpec
       "called with many targets and maximum depth" should {
         val genTestCase = for {
           dag      <- genSummaryDagFromGenesis
-          targets  <- Gen.someOf(dag)
+          targetN  <- Gen.choose(1, math.min(5, dag.size))
+          targets  <- Gen.pick(targetN, dag)
           maxDepth <- Gen.choose(0, dag.size)
           req = StreamAncestorBlockSummariesRequest(
             targetBlockHashes = targets.map(_.blockHash),
@@ -866,12 +930,16 @@ class GrpcGossipServiceSpec
           )
         } yield TestCase(dag, req)
 
-        "start with the targets" in TestFixture(genTestCase) {
-          case TestCase(_, req) =>
+        "start with the target having the highest j-rank" in TestFixture(genTestCase) {
+          case tc @ TestCase(_, req) =>
             stub.streamAncestorBlockSummaries(req).toListL.map { ancestors =>
-              val targetHashes   = req.targetBlockHashes
-              val startingHashes = ancestors.map(_.blockHash).take(targetHashes.size)
-              startingHashes should contain theSameElementsAs targetHashes
+              val targetHashes = req.targetBlockHashes
+              if (targetHashes.isEmpty) ancestors shouldBe empty
+              else {
+                targetHashes should contain(ancestors.head.blockHash)
+                val maxRank = targetHashes.map(tc.summaries).map(_.getHeader.jRank).max
+                ancestors.head.getHeader.jRank shouldBe maxRank
+              }
             }
         }
 
@@ -897,7 +965,9 @@ class GrpcGossipServiceSpec
             }
         }
 
-        "return all ancestors up to that depth from any of the targets" in TestFixture(genTestCase) {
+        "return all ancestors up to that depth from any of the targets" in TestFixture(
+          genTestCase
+        ) {
           case tc @ TestCase(_, req) =>
             stub.streamAncestorBlockSummaries(req).toListL.map { ancestors =>
               val ancestorHashes = ancestors.map(_.blockHash)
@@ -910,10 +980,10 @@ class GrpcGossipServiceSpec
 
               ancestorHashes should contain theSameElementsAs depthsFromNearest.keySet
               // Check partial ordering
-              if (ancestorHashes.nonEmpty) {
-                Inspectors.forAll(ancestorHashes.init zip ancestorHashes.tail) {
+              if (ancestors.nonEmpty) {
+                Inspectors.forAll(ancestors.init zip ancestors.tail) {
                   case (a, b) =>
-                    depthsFromNearest(a) should be <= depthsFromNearest(b)
+                    a.jRank should be >= b.jRank
                 }
               }
             }
@@ -963,7 +1033,9 @@ class GrpcGossipServiceSpec
             }
         }
 
-        "return the known blocks if they are within the maximum depth" in TestFixture(genTestCase) {
+        "return the known blocks if they are within the maximum depth" in TestFixture(
+          genTestCase
+        ) {
           case tc @ TestCase(_, req0) =>
             // Just using 1 known so we know that we won't stop before reaching it due to
             // other known ancestors on the path.
@@ -1104,7 +1176,7 @@ class GrpcGossipServiceSpec
                     def downloaded(blockHash: ByteString) = Task.unit
                   }
 
-                  val downloadManager = new DownloadManager[Task] {
+                  val downloadManager = new BlockDownloadManager[Task] {
                     @volatile var scheduled = Vector.empty[ByteString]
                     def scheduleDownload(summary: BlockSummary, source: Node, relay: Boolean) = {
                       source shouldBe node
@@ -1239,8 +1311,8 @@ class GrpcGossipServiceSpec
         /* Abstracts over streamDagSlice RPC test, parameters are dag, start and end ranks */
         def test(task: (Vector[BlockSummary], Int, Int) => Task[Unit]): Unit =
           forAll(genSummaryDagFromGenesis) { dag =>
-            val minRank = dag.map(_.rank).min.toInt
-            val maxRank = dag.map(_.rank).max.toInt
+            val minRank = dag.map(_.jRank).min.toInt
+            val maxRank = dag.map(_.jRank).max.toInt
 
             val startGen: Gen[Int] = Gen.choose(minRank, math.max(maxRank - 1, minRank))
             val endGen: Gen[Int]   = startGen.flatMap(start => Gen.choose(start, maxRank))
@@ -1265,13 +1337,13 @@ class GrpcGossipServiceSpec
                         .streamDagSliceBlockSummaries(req)
                         .toListL
               } yield {
-                val expected = dag.filter(s => s.rank >= startRank && s.rank <= endRank)
+                val expected = dag.filter(s => s.jRank >= startRank && s.jRank <= endRank)
                 // Returned slice must be increasing order by rank,
                 // but it may differ from expected if there are multiple summaries for the same rank.
                 // We don't care about it and checking only ranks
                 Inspectors.forAll(res.zip(expected)) {
                   case (a, b) =>
-                    assert(a.rank == b.rank)
+                    assert(a.jRank == b.jRank)
                 }
               }
           }
@@ -1343,7 +1415,7 @@ object GrpcGossipServiceSpec extends TestRuntime with ArbitraryConsensusAndComm 
       def syncDag(source: Node, targetBlockHashes: Set[ByteString]) = ???
       def downloaded(blockHash: ByteString): Task[Unit]             = ???
     }
-    private val emptyDownloadManager = new DownloadManager[Task] {
+    private val emptyDownloadManager = new BlockDownloadManager[Task] {
       def scheduleDownload(summary: BlockSummary, source: Node, relay: Boolean) = ???
     }
     private val emptyGenesisApprover = new GenesisApprover[Task] {
@@ -1356,10 +1428,24 @@ object GrpcGossipServiceSpec extends TestRuntime with ArbitraryConsensusAndComm 
       new GossipServiceServer.Backend[Task] {
         def hasBlock(blockHash: ByteString) =
           Task.delay(testDataRef.get.blocks.contains(blockHash))
-        def getBlock(blockHash: ByteString) =
-          Task.delay(testDataRef.get.blocks.get(blockHash))
+        def getBlock(blockHash: ByteString, excludeDeployBodies: Boolean) =
+          Task.delay(testDataRef.get.blocks.get(blockHash).map { block =>
+            if (excludeDeployBodies) {
+              block.clearDeployBodies
+            } else {
+              block
+            }
+          })
         def getBlockSummary(blockHash: ByteString) =
           Task.delay(testDataRef.get.summaries.get(blockHash))
+        def getDeploys(deployHashes: Set[ByteString]) = {
+          val deploys = testDataRef.get.blocks.values.flatMap { b =>
+            b.getBody.deploys.map(_.getDeploy).filter(d => deployHashes(d.deployHash))
+          }.toSet
+
+          Iterant.fromIterator(deploys.iterator)
+        }
+
         def latestMessages: Task[Set[Block.Justification]] =
           Task.delay(
             testDataRef.get.summaries.values
@@ -1375,9 +1461,9 @@ object GrpcGossipServiceSpec extends TestRuntime with ArbitraryConsensusAndComm 
                   .get()
                   .summaries
                   .values
-                  .filter(s => s.rank >= startRank && s.rank <= endRank)
+                  .filter(s => s.jRank >= startRank && s.jRank <= endRank)
                   .toList
-                  .sortBy(_.rank)
+                  .sortBy(_.jRank)
               )
             )
             .flatMap(Iterant.fromSeq[Task, BlockSummary])
@@ -1392,7 +1478,7 @@ object GrpcGossipServiceSpec extends TestRuntime with ArbitraryConsensusAndComm 
         maxParallelBlockDownloads: Int = 100,
         blockChunkConsumerTimeout: FiniteDuration = 10.seconds,
         synchronizer: Synchronizer[Task] = emptySynchronizer,
-        downloadManager: DownloadManager[Task] = emptyDownloadManager,
+        downloadManager: BlockDownloadManager[Task] = emptyDownloadManager,
         genesisApprover: GenesisApprover[Task] = emptyGenesisApprover,
         rateLimiter: RateLimiter[Task, ByteString] = RateLimiter.noOp,
         mkBackend: AtomicReference[TestData] => GossipServiceServer.Backend[Task] = defaultBackend

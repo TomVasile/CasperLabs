@@ -1,14 +1,17 @@
 use engine_shared::{stored_value::StoredValue, transform::Transform};
-use engine_test_support::low_level::{
-    DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR,
-    DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT,
+use engine_test_support::{
+    internal::{
+        DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_GENESIS_CONFIG,
+        DEFAULT_PAYMENT,
+    },
+    DEFAULT_ACCOUNT_ADDR,
 };
-use types::{account::PublicKey, CLValue, Key};
+use types::{CLValue, Key};
 
 #[ignore]
 #[test]
 fn should_run_ee_601_pay_session_new_uref_collision() {
-    let genesis_public_key = PublicKey::new(DEFAULT_ACCOUNT_ADDR);
+    let genesis_public_key = DEFAULT_ACCOUNT_ADDR;
 
     let exec_request = {
         let deploy = DeployItemBuilder::new()

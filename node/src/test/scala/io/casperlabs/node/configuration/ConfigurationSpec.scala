@@ -85,6 +85,7 @@ class ConfigurationSpec
       syncMinBlockCountToCheckWidth = 1,
       syncMaxBondingRate = 1.0,
       syncMaxDepthAncestorsRequest = 1,
+      syncDisableValidations = false,
       initSyncMaxNodes = 1,
       initSyncMinSuccessful = 1,
       initSyncMemoizeNodes = false,
@@ -128,6 +129,12 @@ class ConfigurationSpec
       maxBlockSizeBytes = 1,
       minTtl = FiniteDuration(1, TimeUnit.HOURS)
     )
+    val highway = Configuration.Highway(
+      enabled = false,
+      omegaMessageTimeStart = 1.0,
+      omegaMessageTimeEnd = 1.0,
+      initRoundExponent = 0
+    )
     val tls = Tls(
       certificate = Paths.get("/tmp/test.crt"),
       key = Paths.get("/tmp/test.key"),
@@ -165,6 +172,7 @@ class ConfigurationSpec
       grpcServer,
       tls,
       casper,
+      highway,
       blockStorage,
       kamonSettings,
       influx.some

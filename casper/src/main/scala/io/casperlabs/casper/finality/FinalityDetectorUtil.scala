@@ -5,11 +5,14 @@ import cats.effect.Sync
 import cats.effect.concurrent.Ref
 import cats.implicits._
 import io.casperlabs.casper.Estimator.{BlockHash, Validator}
-import io.casperlabs.casper.util.{DagOperations, ProtoUtil}
+import io.casperlabs.casper.dag.DagOperations
+import io.casperlabs.casper.util.ProtoUtil
 import io.casperlabs.models.Message
 import io.casperlabs.storage.dag.DagRepresentation
 
 import scala.collection.mutable.{IndexedSeq => MutableSeq}
+import io.casperlabs.casper.validation.Validation
+import io.casperlabs.storage.dag.FinalityStorage
 
 object FinalityDetectorUtil {
 
@@ -72,7 +75,7 @@ object FinalityDetectorUtil {
       validators: Set[Validator]
   ): F[Map[Validator, Level]] =
     panoramaOfBlockByValidators(blockDag, block, validators)
-      .map(_.mapValues(_.rank))
+      .map(_.mapValues(_.jRank))
 
   /**
     * Get level zero messages of the specified validator and specified candidateBlock
@@ -141,10 +144,12 @@ object FinalityDetectorUtil {
   private[casper] def panoramaM[F[_]: Monad](
       dag: DagRepresentation[F],
       validatorsToIndex: Map[Validator, Int],
-      blockSummary: Message
+      blockSummary: Message,
+      isHighway: Boolean
   ): F[MutableSeq[Level]] =
     for {
-      equivocators <- dag.getEquivocators
+      equivocators <- if (isHighway) dag.getEquivocatorsInEra(blockSummary.eraId)
+                     else dag.getEquivocators
       latestBlockDagLevelAsMap <- FinalityDetectorUtil
                                    .panoramaDagLevelsOfBlock(
                                      dag,
@@ -180,25 +185,26 @@ object FinalityDetectorUtil {
       .map(_._2)
 
   /** Returns a set of blocks that were finalized indirectly when a block from the main chain is finalized. */
-  def finalizedIndirectly[F[_]: Sync](
+  def finalizedIndirectly[F[_]: Sync: FinalityStorage](
       block: BlockHash,
-      finalizedSoFar: Set[BlockHash],
       dag: DagRepresentation[F]
   ): F[Set[BlockHash]] =
     for {
-      finalizedBlocksCache <- Ref[F].of(finalizedSoFar)
       finalizedImplicitly <- DagOperations
                               .bfTraverseF[F, BlockHash](List(block))(
                                 hash =>
-                                  for {
-                                    finalizedBlocks <- finalizedBlocksCache.get
-                                    notFinalized <- dag
-                                                     .lookupUnsafe(hash)
-                                                     .map(
-                                                       _.parents.filterNot(finalizedBlocks.contains)
-                                                     )
-                                    _ <- finalizedBlocksCache.update(_ ++ notFinalized)
-                                  } yield notFinalized.toList
+                                  dag
+                                    .lookupUnsafe(hash)
+                                    .map(
+                                      _.parents
+                                    )
+                                    .flatMap(
+                                      _.toList.filterA(
+                                        FinalityStorage[F]
+                                          .isFinalized(_)
+                                          .map(!_) // Follow parents that haven't been finalized yet.
+                                      )
+                                    )
                               )
                               .toList
     } yield finalizedImplicitly.toSet - block // We don't want to include `block`.

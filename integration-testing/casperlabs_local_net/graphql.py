@@ -9,13 +9,18 @@ class GraphQL:
     """
 
     DEFAULT_BLOCK_SUB_SELECT = """blockHash
-                            parentHashes
+                            parents {
+                                blockHash
+                            }
                             deployCount
                             deployErrorCount
                             blockSizeBytes"""
     DEFAULT_DEPLOY_SUB_SELECT = """deploy {
                                 deployHash
-                                accountId
+                                account {
+                                    publicKeyBase16
+                                    publicKeyBase64
+                                }
                                 timestamp
                                 gasPrice
                             }
@@ -49,12 +54,12 @@ class GraphQL:
 
             deploys
             blockHash
-            parentHashes
-            justificationHashes
+            parents
+            justifications
             timestamp
             protocolVersion
             deployCount
-            rank
+            jRank
             validatorPublicKey
             validatorBlockSeqNum
             chainId

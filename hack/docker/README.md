@@ -34,6 +34,7 @@ The setup process will establish validator keys in `.casperlabs/node-*` and bond
 Up to 10 nodes can be created due to the way ports are being exposed on the host: you can deploy to `node-0` on 40401, `node-1` on 40411, `node-2` on 40421, and so on.
 
 If you plan to do lots of deploys it can help to enable auto-proposing, so you don't have to issue `propose` commands after each deploy. To do so just run `export CL_CASPER_AUTO_PROPOSE_ENABLED=true` prior to running the `make` commands.
+If you wish to work with the software currently in the dev branch, run `export CL_VERSION=dev` before setting up the network.
 
 `node-0` will be the bootstrap node that all subsequent nodes connect to, so create that first.
 
@@ -68,6 +69,31 @@ make node-1/up node-2/up
 ```
 
 After connection is complete, all node logs will show `Peers: 2`.
+
+### Highway Mode
+
+To start the nextwork in Highway mode, first export an environment variable to enable int, then start nodes, optionally setting different rounds exponents for them.
+
+```console
+export CL_HIGHWAY_ENABLED=true
+CL_HIGHWAY_INIT_ROUND_EXPONENT=14 make node-0/up
+CL_HIGHWAY_INIT_ROUND_EXPONENT=15 make node-1/up
+```
+
+The default values for era length can be found in [highway-env.sh](./scripts/highway-env.sh)
+which is used to generate common overrides for the defaults in the chainspec just
+before the first node is started, and calculate a genesis era epoch so that it
+will be currently active (otherwise the nodes couldn't start their schedule).
+
+If for any reason you need to recreate _all_ nodes, with none of them left to restore the state of the others,
+then the original era will likely have gone out of scope and the nodes will not produce blocks.
+Start them like so, to recreate the necessary genesis era epoch:
+
+```console
+make reset-highway-env node-0/up node-1/up node-2/up
+```
+
+Alternatively you can run `make clean` before bringing back the nodes.
 
 ## Cleanup
 To cleanup the network stopping and removing all containers run the command `make clean`.
@@ -128,7 +154,7 @@ for example:
 ```bash
 # Get the node-id for TLS.
 NODE=0
-NODE_ID=$(cat $DIR/.casperlabs/node-$NODE/node-id)
+NODE_ID=$(cat $DIR/.casperlabs/nodes/node-$NODE/node-id)
 casperlabs-client --host localhost --port 404${NODE}1 --node-id $NODE_ID show-blocks --depth 10
 ```
 

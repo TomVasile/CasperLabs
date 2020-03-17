@@ -181,7 +181,7 @@ def prepare_sdist():
         for f in [
             "bonding.wasm",
             "standard_payment.wasm",
-            "transfer_to_account.wasm",
+            "transfer_to_account_u512.wasm",
             "unbonding.wasm",
         ]
     ]
@@ -215,7 +215,7 @@ class CDevelop(DevelopCommand):
 
 setup(
     name=NAME,
-    version="0.8.0",
+    version="0.8.4",
     packages=find_packages(exclude=["tests"]),
     setup_requires=[
         "protobuf==3.9.1",

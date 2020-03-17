@@ -1,17 +1,20 @@
 use engine_shared::stored_value::StoredValue;
-use engine_test_support::low_level::{
-    utils, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR,
-    DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT,
+use engine_test_support::{
+    internal::{
+        utils, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_GENESIS_CONFIG,
+        DEFAULT_PAYMENT,
+    },
+    DEFAULT_ACCOUNT_ADDR,
 };
-use types::{Key, U512};
+use types::{account::PublicKey, Key, U512};
 
 const CONTRACT_CREATE: &str = "ee_572_regression_create.wasm";
 const CONTRACT_ESCALATE: &str = "ee_572_regression_escalate.wasm";
 const CONTRACT_TRANSFER: &str = "transfer_purse_to_account.wasm";
 const CREATE: &str = "create";
 
-const ACCOUNT_1_ADDR: [u8; 32] = [1u8; 32];
-const ACCOUNT_2_ADDR: [u8; 32] = [2u8; 32];
+const ACCOUNT_1_ADDR: PublicKey = PublicKey::ed25519_from([1u8; 32]);
+const ACCOUNT_2_ADDR: PublicKey = PublicKey::ed25519_from([2u8; 32]);
 
 #[ignore]
 #[test]
@@ -56,7 +59,7 @@ fn should_run_ee_572_regression() {
 
     let contract: Key = {
         let account = match builder.query(None, Key::Account(ACCOUNT_1_ADDR), &[]) {
-            Some(StoredValue::Account(account)) => account,
+            Ok(StoredValue::Account(account)) => account,
             _ => panic!("Could not find account at: {:?}", ACCOUNT_1_ADDR),
         };
         *account

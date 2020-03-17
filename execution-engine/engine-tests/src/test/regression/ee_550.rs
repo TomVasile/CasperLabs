@@ -1,6 +1,9 @@
-use engine_test_support::low_level::{
-    DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_ACCOUNT_ADDR,
-    DEFAULT_GENESIS_CONFIG, DEFAULT_PAYMENT, STANDARD_PAYMENT_CONTRACT,
+use engine_test_support::{
+    internal::{
+        DeployItemBuilder, ExecuteRequestBuilder, InMemoryWasmTestBuilder, DEFAULT_GENESIS_CONFIG,
+        DEFAULT_PAYMENT, STANDARD_PAYMENT_CONTRACT,
+    },
+    DEFAULT_ACCOUNT_ADDR,
 };
 use types::account::PublicKey;
 
@@ -31,10 +34,7 @@ fn should_run_ee_550_remove_with_saturated_threshold_regression() {
                 (String::from(PASS_TEST_REMOVE),),
             )
             .with_payment_code(STANDARD_PAYMENT_CONTRACT, (*DEFAULT_PAYMENT,))
-            .with_authorization_keys(&[
-                PublicKey::new(DEFAULT_ACCOUNT_ADDR),
-                PublicKey::new(KEY_2_ADDR),
-            ])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_ADDR, PublicKey::ed25519_from(KEY_2_ADDR)])
             .with_deploy_hash(DEPLOY_HASH)
             .build();
 
@@ -71,10 +71,7 @@ fn should_run_ee_550_update_with_saturated_threshold_regression() {
                 (String::from(PASS_TEST_UPDATE),),
             )
             .with_payment_code(STANDARD_PAYMENT_CONTRACT, (*DEFAULT_PAYMENT,))
-            .with_authorization_keys(&[
-                PublicKey::new(DEFAULT_ACCOUNT_ADDR),
-                PublicKey::new(KEY_2_ADDR),
-            ])
+            .with_authorization_keys(&[DEFAULT_ACCOUNT_ADDR, PublicKey::ed25519_from(KEY_2_ADDR)])
             .with_deploy_hash(DEPLOY_HASH)
             .build();
 

@@ -11,7 +11,7 @@ use std::{
 };
 
 use engine_core::{engine_state, DEPLOY_HASH_LENGTH};
-use types::account::PUBLIC_KEY_LENGTH;
+use types::account::ED25519_LENGTH;
 
 pub use transforms::TransformMap;
 
@@ -23,20 +23,30 @@ pub(crate) fn vec_to_array(input: Vec<u8>, input_name: &str) -> Result<[u8; 32],
         .map_err(|_| format!("{} must be 32 bytes.", input_name).into())
 }
 
+/// Try to convert a `Vec<u8>` to a 64-byte array.
+pub(crate) fn vec_to_array64(input: Vec<u8>, input_name: &str) -> Result<[u8; 64], ParsingError> {
+    if input.len() != 64 {
+        return Err(format!("{} must be 64 bytes.", input_name).into());
+    }
+    let mut result = [0; 64];
+    result.copy_from_slice(&input);
+    Ok(result)
+}
+
 #[derive(Debug)]
 pub enum MappingError {
     InvalidStateHashLength { expected: usize, actual: usize },
     InvalidPublicKeyLength { expected: usize, actual: usize },
     InvalidDeployHashLength { expected: usize, actual: usize },
-    ParsingError(ParsingError),
+    Parsing(ParsingError),
     InvalidStateHash(String),
     MissingPayload,
-    TryFromSliceError,
+    TryFromSlice,
 }
 
 impl MappingError {
     pub fn invalid_public_key_length(actual: usize) -> Self {
-        let expected = PUBLIC_KEY_LENGTH;
+        let expected = ED25519_LENGTH;
         MappingError::InvalidPublicKeyLength { expected, actual }
     }
 
@@ -48,7 +58,7 @@ impl MappingError {
 
 impl From<ParsingError> for MappingError {
     fn from(error: ParsingError) -> Self {
-        MappingError::ParsingError(error)
+        MappingError::Parsing(error)
     }
 }
 
@@ -59,7 +69,7 @@ impl From<MappingError> for engine_state::Error {
             MappingError::InvalidStateHashLength { expected, actual } => {
                 engine_state::Error::InvalidHashLength { expected, actual }
             }
-            _ => engine_state::Error::DeployError,
+            _ => engine_state::Error::Deploy,
         }
     }
 }
@@ -82,12 +92,10 @@ impl Display for MappingError {
                 "Invalid deploy hash length: expected {}, actual {}",
                 expected, actual
             ),
-            MappingError::ParsingError(ParsingError(message)) => {
-                write!(f, "Parsing error: {}", message)
-            }
+            MappingError::Parsing(ParsingError(message)) => write!(f, "Parsing error: {}", message),
             MappingError::InvalidStateHash(message) => write!(f, "Invalid hash: {}", message),
             MappingError::MissingPayload => write!(f, "Missing payload"),
-            MappingError::TryFromSliceError => write!(f, "Unable to convert from slice"),
+            MappingError::TryFromSlice => write!(f, "Unable to convert from slice"),
         }
     }
 }
