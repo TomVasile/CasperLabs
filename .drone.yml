@@ -5,12 +5,12 @@
 # verbose in the steps.
 #
 #__buildenv:
-#  image: "casperlabs/buildenv:latest"
+#  image: "tvasile1012/test-repo:test"
 #
 #__sbtenv:
 #  environment:
 #    - "_JAVA_OPTIONS=-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-#  image: "casperlabs/buildenv:latest"
+#  image: "tvasile1012/test-repo:test"
 #  volumes:
 #    - "/var/cache/cl-build/.sbt:/root/.sbt"
 #    - "/var/cache/cl-build/.ivy2:/root/.ivy2"
@@ -27,7 +27,7 @@ clone:
           EMAIL=ci git merge --no-edit FETCH_HEAD
       fi
       git rev-parse HEAD
-    image: "casperlabs/buildenv:latest"
+    image: "tvasile1012/test-repo:test"
 
 #NOTE: 1. Had to remove cached .sbt/.ivy2 dirs for drone autoscaling. This is because
 # drone uses docker bind mounts which do not create the host dir if it is nonexistent,
@@ -44,7 +44,7 @@ steps:
 - name: markdown-link-check
   commands:
   - "ci/markdown-link-check.sh"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   failure: "ignore"
   when:
     event:
@@ -59,7 +59,7 @@ steps:
   - "sbt test"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     event:
     - pull_request
@@ -75,7 +75,7 @@ steps:
   commands:
   - STATUS_CHECK=$(git status)
   - if echo $STATUS_CHECK | grep -q "modified" ; then echo "$STATUS_CHECK"; exit 1; fi
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     event:
     - pull_request
@@ -95,7 +95,7 @@ steps:
   - "cd execution-engine/"
   - "make setup-rs"
   - "make test-rs test-contracts-rs"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     event:
     - pull_request
@@ -115,7 +115,7 @@ steps:
   - "make setup"
   - "make build-contracts-rs"
   - "make test-as test-contracts-as"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     event:
     - pull_request
@@ -129,7 +129,7 @@ steps:
   - "cd execution-engine"
   - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
   - "make check-format"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     event:
     - pull_request
@@ -150,7 +150,7 @@ steps:
   - "cd execution-engine"
   - "make setup-rs"
   - "make lint"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     event:
     - pull_request
@@ -171,7 +171,7 @@ steps:
   - "cd execution-engine"
   - "make setup-audit"
   - "make audit"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     event:
     - pull_request
@@ -189,7 +189,7 @@ steps:
   commands:
   - "cd integration-testing"
   - "./run_flake8_black.sh"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     event:
     - pull_request
@@ -205,7 +205,7 @@ steps:
 - name: markdown-link-check-bors
   commands:
   - "ci/markdown-link-check.sh"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   failure: "ignore"
   when:
     branch:
@@ -220,7 +220,7 @@ steps:
   commands:
   - "cd integration-testing"
   - "./run_flake8_black.sh"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     branch:
     - staging
@@ -237,7 +237,7 @@ steps:
   - "make docker-build/node docker-build/client"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -250,7 +250,7 @@ steps:
   commands:
   - STATUS_CHECK=$(git status)
   - if echo $STATUS_CHECK | grep -q "modified" ; then echo "$STATUS_CHECK"; exit 1; fi
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     branch:
     - staging
@@ -271,7 +271,7 @@ steps:
   - "cd execution-engine/"
   - "make setup"
   - "make test"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     branch:
     - staging
@@ -286,7 +286,7 @@ steps:
   - "cd execution-engine"
   - "~/.cargo/bin/rustup toolchain install $(cat rust-toolchain)"
   - "make check-format"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     branch:
     - staging
@@ -309,7 +309,7 @@ steps:
   - "cd execution-engine"
   - "make setup-rs"
   - "make lint"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     branch:
     - staging
@@ -332,7 +332,7 @@ steps:
   - "cd execution-engine"
   - "make setup-audit"
   - "make audit"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     branch:
     - staging
@@ -353,7 +353,7 @@ steps:
   - "cd execution-engine"
   - "make setup-rs"
   - "make bench"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     branch:
     - staging
@@ -379,7 +379,7 @@ steps:
   - "make docker-build/integration-testing"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -397,7 +397,7 @@ steps:
   - "make docker-build/key-generator"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -422,7 +422,7 @@ steps:
   - "make docker-build/grpcwebproxy"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -439,7 +439,7 @@ steps:
   - "mkdir /tmp/keys-DRONE-${DRONE_BUILD_NUMBER}"
   - "./hack/key-management/docker-gen-keys.sh /tmp/keys-DRONE-${DRONE_BUILD_NUMBER} --test"
   - "rm -rf /tmp/keys-DRONE-${DRONE_BUILD_NUMBER}"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -462,7 +462,7 @@ steps:
   - "./docker_run_tests.sh --unique_run_num 0"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -482,7 +482,7 @@ steps:
   - "./docker_run_tests.sh --unique_run_num 1"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -502,7 +502,7 @@ steps:
   - "./docker_run_tests.sh --unique_run_num 2"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -522,7 +522,7 @@ steps:
   - "./docker_run_tests.sh --unique_run_num 3"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -543,7 +543,7 @@ steps:
   - "cd execution-engine"
   - "make setup-rs"
   - "make build"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     branch:
     - dev
@@ -559,7 +559,7 @@ steps:
   - "make docker-build/execution-engine"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -577,7 +577,7 @@ steps:
   commands:
   - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
   - "make docker-build/key-generator"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -593,7 +593,7 @@ steps:
   commands:
   - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
   - "make docker-build/explorer"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -609,7 +609,7 @@ steps:
   commands:
   - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
   - "make docker-build/grpcwebproxy"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -626,7 +626,7 @@ steps:
   - "make clean"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     branch:
     - dev
@@ -655,7 +655,7 @@ steps:
   - "cp node/target/rpm/RPMS/noarch/casperlabs-node-*.noarch.rpm artifacts/${DRONE_BRANCH}"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -678,7 +678,7 @@ steps:
   - "cp execution-engine/target/debian/casperlabs-engine-grpc-server_*.deb artifacts/${DRONE_BRANCH}"
   - "cp execution-engine/target/release/rpmbuild/RPMS/x86_64/casperlabs-engine-grpc-server-*.rpm artifacts/${DRONE_BRANCH}"
   - "WORKING_DIR=$(pwd) ; cd execution-engine/target/release/rpmbuild/SOURCES ; OS=$(uname -s | tr '[:upper:]' '[:lower:]') ; ARCH=$(uname -p) ; SOURCE=$(ls casperlabs-engine-grpc-server-*.tar.gz | sed \"s/.tar.gz//\") ; TARGET=$(ls $SOURCE*.tar.gz | sed \"s/.tar.gz/_\"$OS\"_\"$ARCH\".tar.gz/\") ; tar -xzf $SOURCE.tar.gz ; tar -czf $TARGET -C $SOURCE/usr/bin/ . && cp $TARGET $WORKING_DIR/artifacts/${DRONE_BRANCH}"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   when:
     branch:
     - dev
@@ -690,7 +690,7 @@ steps:
   - package-sbt-artifacts-merge
 
 - name: package-python-client
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   commands:
   - "make build-client-contracts"
   - "cd integration-testing"
@@ -774,7 +774,7 @@ steps:
         docker push casperlabs/grpcwebproxy:latest
       fi
       echo "done"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   environment:
     DOCKER_PASSWORD:
       from_secret: docker_password
@@ -830,7 +830,7 @@ steps:
   - "docker images | grep DRONE | grep -E '([1-9][0-9]|[4-9]).hours' | awk '{print $3}' | sort -n | uniq | xargs --no-run-if-empty docker rmi -f || true"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -936,7 +936,7 @@ steps:
   - "cp node/target/rpm/RPMS/noarch/casperlabs-node-*.noarch.rpm artifacts/${DRONE_BRANCH}"
   environment:
     _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -953,7 +953,7 @@ steps:
   - "cp execution-engine/target/debian/casperlabs-engine-grpc-server_*.deb artifacts/${DRONE_BRANCH}"
   - "cp execution-engine/target/release/rpmbuild/RPMS/x86_64/casperlabs-engine-grpc-server-*.rpm artifacts/${DRONE_BRANCH}"
   - "WORKING_DIR=$(pwd) ; cd execution-engine/target/release/rpmbuild/SOURCES ; OS=$(uname -s | tr '[:upper:]' '[:lower:]') ; ARCH=$(uname -p) ; SOURCE=$(ls casperlabs-engine-grpc-server-*.tar.gz | sed \"s/.tar.gz//\") ; TARGET=$(ls $SOURCE*.tar.gz | sed \"s/.tar.gz/_\"$OS\"_\"$ARCH\".tar.gz/\") ; tar -xzf $SOURCE.tar.gz ; tar -czf $TARGET -C $SOURCE/usr/bin/ . && cp $TARGET $WORKING_DIR/artifacts/${DRONE_BRANCH}"
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   volumes:
   - name: docker_sock
     path: "/var/run/docker.sock"
@@ -964,7 +964,7 @@ steps:
   - package-sbt-artifacts-tag
 
 - name: package-python-client-tag
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   commands:
   - "make build-client-contracts"
   - "cd integration-testing"
@@ -1014,7 +1014,7 @@ steps:
     - refs/tags/v*
 
 - name: rsync-mac-tarball-tag
-  image: "casperlabs/buildenv:latest"
+  image: "tvasile1012/test-repo:test"
   environment:
     SSH_HOST:
       from_secret: mac-host
@@ -1229,7 +1229,7 @@ clone:
 
 steps:
 - name: drone-docker-image-cleanup
-  image: casperlabs/buildenv:latest
+  image: tvasile1012/test-repo:test
   commands:
   - "docker images --filter \"dangling=true\" -q --no-trunc | xargs --no-run-if-empty docker rmi -f || true"
   - "docker images | grep DRONE | grep -E '([1-9][0-9]|[4-9]).hours' | awk '{print $3}' | sort -n | uniq | xargs --no-run-if-empty docker rmi -f || true"
