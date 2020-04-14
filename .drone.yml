@@ -995,12 +995,8 @@ steps:
   - "pipenv run python3 setup.py sdist"
   - "cp dist/casperlabs* ../../../artifacts/${DRONE_BRANCH}"
   when:
-    branch:
-    - dev
-    - release-*
-    - master
-    event:
-    - push
+    ref:
+    - refs/tags/v*
   depends_on:
     - package-ee-tag
 
@@ -1076,6 +1072,21 @@ steps:
   - rsync-mac-tarball-tag
   - package-python-client-tag
 
+- name: pypi-publish
+  image: plugins/pypi
+  settings:
+    username:
+      from_secret: pypi_user
+    password:
+      from_secret: pypi_pass
+    repository: "https://test.pypi.org/legacy/"
+    setupfile: "integration-testing/client/CasperLabsClient/setup.py"
+  when:
+    ref:
+    - refs/tags/v*
+  depends_on:
+  - github_publish_release_artifacts
+
 - name: npm-publish
   image: plugins/npm
   settings:
@@ -1091,6 +1102,9 @@ steps:
     - true
     access:
     - "public"
+  when:
+    ref:
+    - refs/tags/v*
   depends_on:
   - github_publish_release_artifacts
 
