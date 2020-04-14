@@ -1081,6 +1081,7 @@ steps:
       from_secret: pypi_pass
     repository: "https://test.pypi.org/legacy/"
     setupfile: "integration-testing/client/CasperLabsClient/setup.py"
+    skip_build: true
   when:
     ref:
     - refs/tags/v*
