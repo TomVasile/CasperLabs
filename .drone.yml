@@ -1206,22 +1206,22 @@ trigger:
   cron: [ drone-docker-image-cleanup-cron ]
 
 # Temporary Pipeline
----
-kind: pipeline
-name: release-int-tests
-
-- name: docker-build-int-release
-  commands:
-  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
-  - "./integration-testing/build_contracts.sh"
-  - "make docker-build-all
-  environment:
-    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock
-    path: "/var/run/docker.sock"
-
+#---
+#kind: pipeline
+#name: release-int-tests
+#
+#- name: docker-build-int-release
+#  commands:
+#  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
+#  - "./integration-testing/build_contracts.sh"
+#  - "make docker-build-all
+#  environment:
+#    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+#  image: "casperlabs/buildenv:latest"
+#  volumes:
+#  - name: docker_sock
+#    path: "/var/run/docker.sock"
+#
 ## Release Branch Only
 #- name: run-integration-tests-parallel-0
 #  commands:
@@ -1287,19 +1287,19 @@ name: release-int-tests
 #  - run-integration-tests-parallel-0
 #  - run-integration-tests-parallel-1
 #  - run-integration-tests-parallel-2
-
-volumes:
-- name: docker_sock
-  host:
-    path: "/var/run/docker.sock"
-- name: temp
-  host:
-    path: "/tmp"
-
-trigger:
-  branch:
-  - "release-*"
-
+#
+#volumes:
+#- name: docker_sock
+#  host:
+#    path: "/var/run/docker.sock"
+#- name: temp
+#  host:
+#    path: "/tmp"
+#
+#trigger:
+#  branch:
+#  - "release-*"
+#
 # Signature for Drone
 ---
 kind: signature
