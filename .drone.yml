@@ -478,87 +478,6 @@ steps:
   depends_on:
   - docker-build-key-bors
 
-# Release Branch Only
-- name: run-integration-tests-parallel-0
-  commands:
-  - "cd integration-testing"
-  - "./docker_run_tests.sh --unique_run_num 0"
-  environment:
-    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock
-    path: "/var/run/docker.sock"
-  - name: temp
-    path: "/tmp"
-  when:
-    branch:
-    - release-*
-  depends_on:
-  - docker-build-ee-int-bors
-  - docker-build-explorer-bors
-
-# Release Branch Only
-- name: run-integration-tests-parallel-1
-  commands:
-  - "cd integration-testing"
-  - "./docker_run_tests.sh --unique_run_num 1"
-  environment:
-    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock
-    path: "/var/run/docker.sock"
-  - name: temp
-    path: "/tmp"
-  when:
-    branch:
-    - release-*
-  depends_on:
-  - docker-build-ee-int-bors
-  - docker-build-explorer-bors
-
-# Release Branch Only
-- name: run-integration-tests-parallel-2
-  commands:
-  - "cd integration-testing"
-  - "./docker_run_tests.sh --unique_run_num 2"
-  environment:
-    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock
-    path: "/var/run/docker.sock"
-  - name: temp
-    path: "/tmp"
-  when:
-    branch:
-    - release-*
-  depends_on:
-  - docker-build-ee-int-bors
-  - docker-build-explorer-bors
-
-# Release Branch Only
-- name: run-integration-tests-serial-3
-  commands:
-  - "cd integration-testing"
-  - "./docker_run_tests.sh --unique_run_num 3"
-  environment:
-    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
-  image: "casperlabs/buildenv:latest"
-  volumes:
-  - name: docker_sock
-    path: "/var/run/docker.sock"
-  - name: temp
-    path: "/tmp"
-  when:
-    branch:
-    - release-*
-  depends_on:
-  - run-integration-tests-parallel-0
-  - run-integration-tests-parallel-1
-  - run-integration-tests-parallel-2
-
 # Dev branch only
 - name: run-integration-tests
   commands:
@@ -1285,6 +1204,101 @@ volumes:
 
 trigger:
   cron: [ drone-docker-image-cleanup-cron ]
+
+# Temporary Pipeline
+---
+kind: pipeline
+name: release-int-tests
+
+- name: docker-build-int-release
+  commands:
+  - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
+  - "./integration-testing/build_contracts.sh"
+  - "make docker-build-all
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock
+    path: "/var/run/docker.sock"
+
+# Release Branch Only
+- name: run-integration-tests-parallel-0
+  commands:
+  - "cd integration-testing"
+  - "./docker_run_tests.sh --unique_run_num 0"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock
+    path: "/var/run/docker.sock"
+  - name: temp
+    path: "/tmp"
+  depends_on:
+  - docker-build-int-release
+
+# Release Branch Only
+- name: run-integration-tests-parallel-1
+  commands:
+  - "cd integration-testing"
+  - "./docker_run_tests.sh --unique_run_num 1"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock
+    path: "/var/run/docker.sock"
+  - name: temp
+    path: "/tmp"
+  depends_on:
+  - docker-build-int-release
+
+# Release Branch Only
+- name: run-integration-tests-parallel-2
+  commands:
+  - "cd integration-testing"
+  - "./docker_run_tests.sh --unique_run_num 2"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock
+    path: "/var/run/docker.sock"
+  - name: temp
+    path: "/tmp"
+  depends_on:
+  - docker-build-int-release
+
+# Release Branch Only
+- name: run-integration-tests-serial-3
+  commands:
+  - "cd integration-testing"
+  - "./docker_run_tests.sh --unique_run_num 3"
+  environment:
+    _JAVA_OPTIONS: "-Xms2G -Xmx2G -XX:MaxMetaspaceSize=1G"
+  image: "casperlabs/buildenv:latest"
+  volumes:
+  - name: docker_sock
+    path: "/var/run/docker.sock"
+  - name: temp
+    path: "/tmp"
+  depends_on:
+  - run-integration-tests-parallel-0
+  - run-integration-tests-parallel-1
+  - run-integration-tests-parallel-2
+
+volumes:
+- name: docker_sock
+  host:
+    path: "/var/run/docker.sock"
+- name: temp
+  host:
+    path: "/tmp"
+
+trigger:
+  branch:
+  - "release-*"
 
 # Signature for Drone
 ---
