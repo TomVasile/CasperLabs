@@ -1073,7 +1073,7 @@ steps:
   - package-python-client-tag
 
 - name: pypi-publish
-  image: plugins/pypi
+  image: tvasile1012/pypi:latest
   settings:
     username:
       from_secret: pypi_user
@@ -1081,6 +1081,7 @@ steps:
       from_secret: pypi_pass
     repository: "https://test.pypi.org/legacy/"
     setupfile: "integration-testing/client/CasperLabsClient/setup.py"
+    dist_dir: "integration-testing/client/CasperLabsClient/dist/"
     skip_build: true
   when:
     ref:
