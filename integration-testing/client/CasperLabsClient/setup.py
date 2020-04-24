@@ -24,7 +24,7 @@ CONTRACTS_DIR = f"{THIS_DIRECTORY}/../../../client/src/main/resources"
 PROTOBUF_DIR = f"{THIS_DIRECTORY}/../../../protobuf"
 PROTO_DIR = f"{THIS_DIRECTORY}/casperlabs_client/proto"
 PACKAGE_DIR = f"{THIS_DIRECTORY}/casperlabs_client"
-NAME = "casperlabs_client"
+NAME = "casperlabs-client-test"
 
 
 def proto_compiler_check():
