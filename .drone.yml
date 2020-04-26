@@ -1074,6 +1074,7 @@ steps:
 
 - name: pypi-publish
   image: tvasile1012/pypi:latest
+  failure: "ignore"
   settings:
     username:
       from_secret: pypi_user
@@ -1091,6 +1092,7 @@ steps:
 
 - name: npm-publish
   image: plugins/npm
+  failure: "ignore"
   settings:
     username:
       from_secret: npm_user
