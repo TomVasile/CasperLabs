@@ -1208,8 +1208,9 @@ trigger:
 # Temporary Pipeline
 ---
 kind: pipeline
-name: release-int-tests
+name: release-int-test
 
+steps:
 - name: docker-build-int-release
   commands:
   - "export DOCKER_LATEST_TAG=DRONE-${DRONE_BUILD_NUMBER}"
