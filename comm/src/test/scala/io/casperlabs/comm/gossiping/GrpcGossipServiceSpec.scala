@@ -1478,13 +1478,13 @@ class GrpcGossipServiceSpec
     "streamDagSliceBlockSummariesSpec" when {
       "called with a min and max rank" should {
         /* Abstracts over streamDagSlice RPC test, parameters are dag, start and end ranks */
-        def test(task: (Vector[BlockSummary], Int, Int) => Task[Unit]): Unit =
+        def test(task: (Vector[BlockSummary], Long, Long) => Task[Unit]): Unit =
           forAll(genSummaryDagFromGenesis) { dag =>
-            val minRank = dag.map(_.jRank).min.toInt
-            val maxRank = dag.map(_.jRank).max.toInt
+            val minRank = dag.map(_.jRank).min
+            val maxRank = dag.map(_.jRank).max
 
-            val startGen: Gen[Int] = Gen.choose(minRank, math.max(maxRank - 1, minRank))
-            val endGen: Gen[Int]   = startGen.flatMap(start => Gen.choose(start, maxRank))
+            val startGen: Gen[Long] = Gen.choose(minRank, math.max(maxRank - 1, minRank))
+            val endGen: Gen[Long]   = startGen.flatMap(start => Gen.choose(start, maxRank))
 
             forAll(startGen, endGen) { (startRank, endRank) =>
               runTestUnsafe(TestData(dag))(task(dag, startRank, endRank))
@@ -1683,7 +1683,8 @@ object GrpcGossipServiceSpec extends TestRuntime with ArbitraryConsensusAndComm 
               blockDownloadManager = blockDownloadManager,
               genesisApprover = genesisApprover,
               maxChunkSize = DefaultMaxChunkSize,
-              maxParallelBlockDownloads = maxParallelBlockDownloads
+              maxParallelBlockDownloads = maxParallelBlockDownloads,
+              deployGossipEnabled = false
             ) map { gss =>
               val svc = GrpcGossipService
                 .fromGossipService(gss, rateLimiter, chainId, blockChunkConsumerTimeout)
